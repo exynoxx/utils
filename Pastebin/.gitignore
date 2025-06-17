@@ -1,0 +1,7 @@
+bin/
+obj/
+.idea/
+node_modules/
+
+package-lock.json
+*.user
