@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>XML UI</title>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117; --surface: #1a1d27; --surface2: #22263a; --surface3: #2a2f47;
+      --border: #2e3352; --accent: #f7896a; --accent2: #fbbb93;
+      --accent-glow: rgba(247,137,106,0.25); --green: #34d399; --yellow: #fbbf24;
+      --red: #f87171; --text: #e2e8f0; --muted: #6b7280;
+      --selected-bg: rgba(247,137,106,0.22); --hover-bg: rgba(247,137,106,0.10);
+      --tag: #fbbb93; --attr-key: #93c5fd; --attr-val: #86efac;
+      --text-node: #e2e8f0; --muted-node: #94a3b8; --radius: 12px; --radius-sm: 6px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
+
+    header { display: flex; align-items: center; gap: 12px; padding: 12px 28px; border-bottom: 1px solid var(--border); background: var(--surface); }
+    .logo { font-size: 1.4rem; font-weight: 800; letter-spacing: -0.5px; color: var(--accent2); }
+    .logo span { color: var(--text); }
+    .subtitle { color: var(--muted); font-size: 0.8rem; }
+
+    .main { display: flex; flex: 1; overflow: hidden; height: calc(100vh - 53px); }
+
+    /* ── LEFT ── */
+    .left-panel { width: 360px; min-width: 260px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--surface); }
+    .panel-header { padding: 10px 14px 8px; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+    .drop-zone { margin: 10px; border: 2px dashed var(--border); border-radius: var(--radius); padding: 18px; display: flex; flex-direction: column; align-items: center; gap: 8px; transition: border-color .2s, background .2s; cursor: pointer; position: relative; }
+    .drop-zone.dragging { border-color: var(--accent); background: var(--accent-glow); }
+    .drop-zone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+    .drop-icon { font-size: 1.8rem; }
+    .drop-label { font-size: 0.8rem; color: var(--muted); text-align: center; }
+    .drop-label strong { color: var(--accent2); }
+    .or-divider { display: flex; align-items: center; gap: 8px; margin: 0 10px; color: var(--muted); font-size: 0.76rem; }
+    .or-divider::before, .or-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+    .xml-textarea { flex: 1; margin: 8px 10px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; color: var(--text); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.75rem; line-height: 1.6; resize: none; outline: none; transition: border-color .2s; min-height: 100px; }
+    .xml-textarea:focus { border-color: var(--accent); }
+    .xml-textarea::placeholder { color: var(--muted); }
+    .parse-btn { margin: 0 10px 10px; padding: 9px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border: none; border-radius: var(--radius-sm); color: #fff; font-weight: 700; font-size: 0.84rem; cursor: pointer; transition: opacity .2s; }
+    .parse-btn:hover { opacity: .9; }
+    .parse-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .error-box { margin: 0 10px 8px; background: rgba(248,113,113,.12); border: 1px solid rgba(248,113,113,.35); border-radius: var(--radius-sm); padding: 7px 10px; font-size: 0.75rem; color: var(--red); font-family: monospace; }
+    .load-progress-wrap { margin: 6px 10px 2px; display: flex; flex-direction: column; gap: 4px; }
+    .load-progress-bar { height: 5px; background: var(--surface3); border-radius: 99px; overflow: hidden; }
+    .load-progress-fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .12s; }
+    .load-progress-label { font-size: 0.7rem; color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 5px; }
+    .file-truncated-notice { margin: 0 10px 4px; font-size: 0.69rem; color: var(--muted); background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 8px; }
+    .file-truncated-notice strong { color: var(--accent2); }
+
+    /* ── MIDDLE ── */
+    .mid-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+    .mid-header { padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; gap: 7px; }
+    .mid-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+    .mid-title { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); white-space: nowrap; }
+    .hint { font-size: 0.7rem; color: var(--muted); }
+    .hint kbd { background: var(--surface3); border: 1px solid var(--border); border-radius: 3px; padding: 1px 4px; font-family: monospace; font-size: 0.67rem; color: var(--text); }
+
+    /* Search */
+    .search-input { flex: 1; min-width: 130px; max-width: 280px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 9px; color: var(--text); font-size: 0.78rem; outline: none; font-family: inherit; transition: border-color .15s; }
+    .search-input:focus { border-color: var(--accent); }
+    .search-input::placeholder { color: var(--muted); }
+    .search-input.active { border-color: var(--yellow); }
+    .search-count { font-size: 0.7rem; color: var(--yellow); white-space: nowrap; font-weight: 600; }
+    .search-hl { background: #fbbf24; color: #0f1117; border-radius: 2px; padding: 0 1px; font-weight: 700; }
+    .icon-btn { padding: 4px 9px; background: var(--surface3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--muted); font-size: 0.73rem; cursor: pointer; font-family: inherit; white-space: nowrap; transition: border-color .15s, color .15s; }
+    .icon-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent2); }
+    .icon-btn:disabled { opacity: .35; cursor: not-allowed; }
+    .goto-input { width: 90px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 7px; color: var(--text); font-size: 0.76rem; outline: none; font-family: inherit; transition: border-color .15s; }
+    .goto-input:focus { border-color: var(--accent); }
+    .page-info { font-size: 0.73rem; color: var(--muted); white-space: nowrap; }
+    .tree-scroll { flex: 1; overflow: auto; padding: 8px 8px 8px 10px; }
+
+    /* Tree */
+    .tree-node { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.78rem; line-height: 1.8; user-select: none; }
+    .tree-row { display: inline-flex; align-items: baseline; border-radius: 4px; padding: 0 3px; cursor: pointer; transition: background .12s; white-space: nowrap; }
+    .tree-row:hover { background: var(--hover-bg); }
+    .tree-row.selected { background: var(--selected-bg); outline: 1px solid rgba(247,137,106,.5); }
+    .tree-indent { display: inline-block; padding-left: 20px; }
+    .toggle-btn { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-right: 4px; border-radius: 3px; color: var(--muted); font-size: 0.62rem; flex-shrink: 0; background: var(--surface3); cursor: pointer; transition: background .12s; }
+    .toggle-btn:hover { background: var(--accent); color: #fff; }
+    .no-toggle { display: inline-block; width: 19px; }
+    .xtag { color: var(--tag); font-weight: 600; }
+    .xattr-key { color: var(--attr-key); }
+    .xattr-val { color: var(--attr-val); }
+    .xtext { color: var(--text-node); }
+    .xmuted { color: var(--muted-node); }
+    .collapsed-hint { color: var(--muted); font-style: italic; font-size: 0.7rem; margin-left: 4px; }
+    .item-idx { color: var(--muted); font-size: 0.62rem; font-family: monospace; padding-right: 4px; flex-shrink: 0; }
+    .item-wrap { display: flex; align-items: flex-start; }
+    .item-sep { border-top: 1px solid var(--border); margin: 3px 0; }
+    .item-meta { display: flex; flex-direction: column; align-items: center; gap: 3px; padding-right: 5px; flex-shrink: 0; padding-top: 3px; }
+    .item-missing-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--yellow); opacity: .8; cursor: default; flex-shrink: 0; }
+    /* Explainer banner */
+    .explainer { background: var(--surface2); border-bottom: 1px solid var(--border); padding: 7px 18px; display: flex; align-items: flex-start; gap: 10px; font-size: 0.75rem; color: var(--muted); line-height: 1.55; }
+    .explainer strong { color: var(--accent2); }
+    .explainer code { background: var(--surface3); border-radius: 3px; padding: 1px 4px; font-family: monospace; font-size: 0.72rem; color: var(--text); }
+    .explainer-close { margin-left: auto; flex-shrink: 0; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 2px; transition: color .15s; }
+    .explainer-close:hover { color: var(--text); }
+
+    /* ── RIGHT ── */
+    .right-panel { width: 370px; min-width: 270px; flex-shrink: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--surface); }
+    .selections-area { flex: 1; overflow: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 5px; min-height: 0; }
+    .no-sel { color: var(--muted); font-size: 0.8rem; padding: 4px 0; }
+    .sel-chip { display: flex; align-items: center; gap: 5px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 8px; font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: var(--accent2); }
+    .sel-chip .xpath-label { flex: 1; word-break: break-all; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .missing-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--yellow); flex-shrink: 0; cursor: default; }
+    .sel-chip.has-missing { border-color: rgba(251,191,36,.35); }
+    .default-input { width: 68px; flex-shrink: 0; background: var(--surface3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; padding: 2px 5px; outline: none; transition: border-color .15s, color .15s; }
+    .default-input:focus { border-color: var(--accent); color: var(--text); }
+    .default-input::placeholder { color: var(--muted); opacity: .55; }
+    .sel-chip .remove-btn { flex-shrink: 0; color: var(--muted); cursor: pointer; font-size: .95rem; line-height: 1; background: none; border: none; padding: 0; transition: color .15s; }
+    .sel-chip .remove-btn:hover { color: var(--red); }
+
+    /* Add col form */
+    .add-col-form { padding: 7px 10px; border-top: 1px solid var(--border); display: flex; gap: 5px; align-items: center; }
+    .add-col-name { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 7px; color: var(--text); font-size: 0.74rem; outline: none; font-family: inherit; transition: border-color .15s; }
+    .add-col-name:focus { border-color: var(--accent); }
+    .add-col-name::placeholder { color: var(--muted); }
+    .add-col-def { width: 60px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 5px; color: var(--text); font-size: 0.7rem; outline: none; font-family: 'JetBrains Mono', monospace; transition: border-color .15s; }
+    .add-col-def:focus { border-color: var(--accent); }
+    .add-col-def::placeholder { color: var(--muted); }
+    .add-col-btn { padding: 5px 9px; background: var(--accent-glow); border: 1px solid var(--accent); border-radius: var(--radius-sm); color: var(--accent2); font-size: 0.74rem; cursor: pointer; font-family: inherit; white-space: nowrap; transition: background .15s; }
+    .add-col-btn:hover { background: var(--accent); color: #fff; }
+
+    /* Right footer */
+    .right-footer { padding: 8px 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 7px; }
+    .fields-list { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 9px; min-height: 28px; max-height: 70px; overflow: auto; }
+    .fields-list .label { color: var(--muted); display: block; font-size: 0.64rem; margin-bottom: 3px; font-family: sans-serif; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; }
+    .field-tag { display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--green); margin-right: 6px; line-height: 1.6; }
+    .keys-box { position: relative; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 9px; }
+    .keys-box-label { display: block; font-size: 0.64rem; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-family: sans-serif; margin-bottom: 4px; }
+    .keys-copy-btn { position: absolute; top: 5px; right: 6px; padding: 2px 7px; background: var(--surface3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--muted); font-size: 0.67rem; cursor: pointer; font-family: sans-serif; transition: border-color .15s, color .15s; }
+    .keys-copy-btn:hover { border-color: var(--accent); color: var(--accent2); }
+    .keys-list { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; line-height: 1.5; color: var(--attr-key); white-space: pre; overflow: auto; max-height: 140px; padding-right: 46px; }
+    .attr-summary { font-family: 'JetBrains Mono', monospace; font-size: 0.69rem; line-height: 1.55; overflow: auto; max-height: 80px; margin-top: 6px; border-top: 1px solid var(--border); padding-top: 5px; white-space: pre-wrap; }
+    .output-preview { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 9px; display: flex; flex-direction: column; gap: 4px; }
+    .output-preview .prev-label { display: flex; align-items: center; justify-content: space-between; }
+    .output-preview .prev-label span { font-size: 0.64rem; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-family: sans-serif; }
+    .output-preview .prev-count { font-size: 0.64rem; color: var(--muted); font-style: italic; font-family: sans-serif; font-weight: 400; text-transform: none; letter-spacing: 0; }
+    .preview-code { font-family: 'JetBrains Mono', monospace; font-size: 0.69rem; line-height: 1.5; color: var(--green); white-space: pre; overflow: auto; max-height: 200px; }
+    .preview-code.is-error { color: var(--red); }
+
+    .extract-btns { display: flex; gap: 7px; }
+    .finish-btn { flex: 1; padding: 9px; background: linear-gradient(135deg, var(--green) 0%, #059669 100%); border: none; border-radius: var(--radius-sm); color: #fff; font-weight: 700; font-size: 0.84rem; cursor: pointer; transition: opacity .2s, transform .1s; }
+    .finish-btn.xml-btn { background: linear-gradient(135deg, var(--accent), var(--accent2)); }
+    .finish-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .finish-btn:not(:disabled):hover { opacity: .9; }
+    .finish-btn:not(:disabled):active { transform: scale(.98); }
+
+    /* Toast */
+    .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); padding: 9px 18px; border-radius: var(--radius-sm); font-size: 0.83rem; font-weight: 600; box-shadow: 0 8px 32px rgba(0,0,0,.45); z-index: 200; pointer-events: none; }
+    .toast.success { background: #064e3b; border: 1px solid var(--green); color: var(--green); }
+    .toast.error   { background: #450a0a; border: 1px solid var(--red);   color: var(--red);   }
+    .toast-enter-active, .toast-leave-active { transition: opacity .3s; }
+    .toast-enter-from, .toast-leave-to { opacity: 0; }
+
+    /* Misc */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--border); }
+    .spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; margin-right: 5px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 12px; color: var(--muted); padding: 40px 20px; text-align: center; }
+    .empty-icon { font-size: 2.8rem; }
+    .empty-label { font-size: 0.86rem; line-height: 1.6; }
+    .badge { display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: #fff; font-size: 0.63rem; font-weight: 700; border-radius: 99px; padding: 1px 6px; min-width: 17px; height: 17px; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo">xml<span>UI</span></div>
+    <div class="subtitle">Interactive XML explorer — click elements to build your extraction query</div>
+  </header>
+
+  <!-- Explainer banner -->
+  <div v-if="showExplainer" class="explainer">
+    <div>
+      <strong>How to use:</strong>
+      Load or paste an XML file on the left and click <strong>Parse XML</strong>.
+      The middle panel shows records paginated in groups of 50 — <kbd style="background:var(--surface3);border:1px solid var(--border);border-radius:3px;padding:1px 4px;font-family:monospace;font-size:.7rem;color:var(--text)">click</kbd> any element or attribute to add it as a column.
+      Use <kbd style="background:var(--surface3);border:1px solid var(--border);border-radius:3px;padding:1px 4px;font-family:monospace;font-size:.7rem;color:var(--text)">ctrl+click</kbd> to select multiple.
+      A <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--yellow);vertical-align:middle;margin:0 2px"></span> yellow dot on a record means one or more of your selected fields is absent in that record — set a <strong>default value</strong> in the right panel.
+      Use <strong>Select all</strong> to auto-add all detected fields, then click <strong>▶ JSON</strong> or <strong>▶ XML</strong> to download.
+    </div>
+    <button class="explainer-close" @click="showExplainer = false" title="Dismiss">&times;</button>
+  </div>
+
+  <div class="main">
+    <!-- ── LEFT: XML Input ── -->
+    <div class="left-panel">
+      <div class="panel-header">XML Input</div>
+      <div class="drop-zone" :class="{ dragging: isDragging }"
+        @dragover.prevent="isDragging = true" @dragleave.prevent="isDragging = false"
+        @drop.prevent="onDrop" @click="triggerFileInput">
+        <input ref="fileInput" type="file" accept=".xml,text/xml,application/xml" @change="onFileChange" style="display:none" />
+        <div class="drop-icon">📂</div>
+        <div class="drop-label"><strong>Click to browse</strong> or drag &amp; drop a <code style="color:var(--accent2)">.xml</code> file</div>
+      </div>
+
+      <div v-if="loadProgress !== null" class="load-progress-wrap">
+        <div class="load-progress-bar"><div class="load-progress-fill" :style="{ width: loadProgress + '%' }"></div></div>
+        <div class="load-progress-label"><span class="spinner"></span>Loading… {{ loadProgress }}%</div>
+      </div>
+
+      <div class="or-divider">or paste XML below</div>
+
+      <div v-if="fileMeta && fileMeta.truncated" class="file-truncated-notice">
+        📄 <strong>{{ fileMeta.name }}</strong> ({{ fileMeta.sizeMB }}&nbsp;MB) — showing first {{ displayChars.toLocaleString() }} chars; <strong>full file parsed</strong>
+      </div>
+
+      <textarea class="xml-textarea" v-model="rawInput" @input="onTextareaInput"
+        :disabled="loadProgress !== null"
+        placeholder='<root><item id="1"><name>Alice</name></item></root>'
+        spellcheck="false"></textarea>
+      <div v-if="parseError" class="error-box">⚠ {{ parseError }}</div>
+      <button class="parse-btn" @click="parseXML" :disabled="loadProgress !== null">Parse XML →</button>
+    </div>
+
+    <!-- ── MIDDLE: Explorer ── -->
+    <div class="mid-panel">
+      <div class="mid-header">
+        <!-- Row 1: title + search -->
+        <div class="mid-row">
+          <div class="mid-title">XML Explorer</div>
+          <template v-if="parsedRoot !== null">
+            <input class="search-input" :class="{ active: activeSearch }" v-model="searchInput"
+              @keyup.enter="runSearch" placeholder="Search values across all records…" />
+            <button class="icon-btn" @click="runSearch">Search</button>
+            <button class="icon-btn" v-if="activeSearch" @click="clearSearch">✕ Clear</button>
+            <span class="search-count" v-if="activeSearch">
+              {{ searchResults.length.toLocaleString() }} match{{ searchResults.length !== 1 ? 'es' : '' }}
+            </span>
+          </template>
+        </div>
+        <!-- Row 2: nav + hint + selected badge -->
+        <div class="mid-row" v-if="parsedRoot !== null">
+          <div class="hint"><kbd>click</kbd> select &nbsp;<kbd>ctrl+click</kbd> multi-select</div>
+          <div style="display:flex;align-items:center;gap:6px;margin-left:auto;flex-wrap:wrap;">
+            <input class="goto-input" v-model.number="gotoRowInput" @keyup.enter="jumpToRow"
+              type="number" min="1" :max="totalVisible" placeholder="Go to #" title="Jump to item number (1-based)" />
+            <button class="icon-btn" @click="jumpToRow">Go</button>
+            <button class="icon-btn" :disabled="page === 0" @click="prevPage">‹</button>
+            <span class="page-info">{{ pageLabel }}</span>
+            <button class="icon-btn" :disabled="(page + 1) * PAGE_SIZE >= totalVisible" @click="nextPage">›</button>
+            <template v-if="selectedPaths.length">
+              <span class="badge">{{ selectedPaths.length }}</span>
+              <span style="font-size:.7rem;color:var(--muted)">selected</span>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tree: flat list of visible items only -->
+      <div class="tree-scroll" ref="treeScroll" v-if="parsedRoot !== null">
+        <div v-if="visibleItems.length === 0" style="padding:12px;color:var(--muted);font-size:.83rem;">
+          {{ activeSearch ? 'No matches for "' + activeSearch + '"' : 'Empty document' }}
+        </div>
+        <template v-for="(item, i) in visibleItems" :key="item.__key">
+          <div class="item-sep" v-if="i > 0"></div>
+          <div class="item-wrap">
+            <div class="item-meta">
+              <span class="item-idx">#{{ item.__key + 1 }}</span>
+              <span v-if="itemHasMissing(item.node)" class="item-missing-dot"
+                :title="itemMissingTip(item.node)"></span>
+            </div>
+            <xml-node
+              :node="item.node" :path="item.path"
+              :selected-paths="selectedPaths" :collapsed-paths="collapsedPaths"
+              :search-query="activeSearch"
+              :field-counts="fieldStats.counts"
+              @select="onNodeSelect" @toggle="onToggle"
+            ></xml-node>
+          </div>
+        </template>
+      </div>
+      <div class="empty-state" v-else>
+        <div class="empty-icon">🔍</div>
+        <div class="empty-label">Paste or upload XML on the left,<br />then explore it here interactively.</div>
+      </div>
+    </div>
+
+    <!-- ── RIGHT: Fields + Export ── -->
+    <div class="right-panel">
+      <div class="panel-header">
+        Selected Fields
+        <span v-if="selectedPaths.length" class="badge">{{ selectedPaths.length }}</span>
+        <button v-if="parsedRoot !== null" class="icon-btn" style="margin-left:auto" @click="selectAllColumns" title="Add all detected fields as columns">Select all</button>
+        <button v-if="selectedPaths.length" @click="clearSelections" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:.72rem;text-decoration:underline;padding:0;">clear</button>
+      </div>
+
+      <div class="selections-area">
+        <div v-if="!selectedPaths.length" class="no-sel">No paths selected yet.<br />Click nodes in the tree or use "Select all".</div>
+        <div v-for="(p, i) in selectedPaths" :key="p" class="sel-chip" :class="{ 'has-missing': fieldMissingCount(p) > 0 }">
+          <span class="missing-dot" v-if="fieldMissingCount(p) > 0"
+            :title="'Missing in ' + fieldMissingCount(p).toLocaleString() + ' / ' + fieldStats.total.toLocaleString() + ' records'"></span>
+          <span class="xpath-label" :title="p">{{ pathToKey(p) }}</span>
+          <input class="default-input" v-model="pathDefaults[p]" placeholder="default…"
+            title="Default value for missing field" @click.stop @keydown.stop />
+          <button class="remove-btn" @click="removePath(i)" title="Remove">×</button>
+        </div>
+      </div>
+
+      <!-- Add new column -->
+      <div class="add-col-form">
+        <input class="add-col-name" v-model="newColName" placeholder="New column name"
+          @keyup.enter="addNewColumn" title="Column / tag name to add" />
+        <input class="add-col-def" v-model="newColDefault" placeholder="value"
+          @keyup.enter="addNewColumn" title="Fixed value or default" />
+        <button class="add-col-btn" @click="addNewColumn">+ Add</button>
+      </div>
+
+      <div class="right-footer">
+        <!-- Available fields -->
+        <div v-if="knownFields.length" class="keys-box">
+          <span class="keys-box-label">Available fields</span>
+          <button class="keys-copy-btn" @click="copyKnownFields">⎘ Copy</button>
+          <pre class="keys-list">{{ knownFieldsDisplay }}</pre>
+          <div v-if="attrSampleLines.length" class="attr-summary" v-html="attrSampleHtml"></div>
+        </div>
+
+        <!-- Output preview -->
+        <div v-if="previewSample" class="output-preview">
+          <div class="prev-label">
+            <span>Output preview</span>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <button class="keys-copy-btn" style="position:static" @click="previewMode = previewMode === 'json' ? 'xml' : 'json'">{{ previewMode === 'json' ? 'View XML' : 'View JSON' }}</button>
+              <span v-if="!previewSample.error" class="prev-count">
+                <template v-if="previewSample.truncated">first 3 of {{ previewSample.totalRows.toLocaleString() }} rows</template>
+                <template v-else>{{ previewSample.totalRows.toLocaleString() }} row{{ previewSample.totalRows !== 1 ? 's' : '' }}</template>
+              </span>
+            </div>
+          </div>
+          <pre class="preview-code" :class="{ 'is-error': previewSample.error }">{{ previewSample.error ? '⚠ ' + previewSample.error : (previewMode === 'xml' ? previewSample.xml : previewSample.json) }}</pre>
+        </div>
+
+        <!-- Extract buttons -->
+        <div class="extract-btns">
+          <button class="finish-btn" :disabled="!selectedPaths.length || parsedRoot === null || running" @click="runExtraction('json')">
+            <span v-if="running && extractFormat === 'json'"><span class="spinner"></span>…</span>
+            <span v-else>▶ JSON</span>
+          </button>
+          <button class="finish-btn xml-btn" :disabled="!selectedPaths.length || parsedRoot === null || running" @click="runExtraction('xml')">
+            <span v-if="running && extractFormat === 'xml'"><span class="spinner"></span>…</span>
+            <span v-else>▶ XML</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <transition name="toast">
+    <div v-if="toast.visible" class="toast" :class="toast.type">{{ toast.msg }}</div>
+  </transition>
+</div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const PAGE_SIZE          = 50;
+const DISPLAY_SIZE_LIMIT = 200 * 1024;
+const DISPLAY_CHARS      = 8000;
+
+// ── XML Parser ─────────────────────────────────────────────────────────────────
+function domToTree(el) {
+  const node = { tag: el.tagName || el.nodeName, attrs: {}, text: '', children: [] };
+  if (el.attributes) {
+    for (let i = 0; i < el.attributes.length; i++) {
+      const a = el.attributes[i];
+      node.attrs[a.name] = a.value;
+    }
+  }
+  for (let i = 0; i < el.childNodes.length; i++) {
+    const ch = el.childNodes[i];
+    if (ch.nodeType === 1) node.children.push(domToTree(ch));
+    else if (ch.nodeType === 3) {
+      const t = ch.textContent.trim();
+      if (t) node.text += (node.text ? ' ' : '') + t;
+    }
+  }
+  return node;
+}
+
+function parseXMLText(text) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(text.trim(), 'application/xml');
+  const err = doc.querySelector('parsererror');
+  if (err) throw new Error(err.textContent.split('\n')[0] || 'XML parse error');
+  return domToTree(doc.documentElement);
+}
+
+// ── Search ─────────────────────────────────────────────────────────────────────
+function nodeMatchesSearch(node, query) {
+  const q = query.toLowerCase();
+  function check(n) {
+    if (n.text && n.text.toLowerCase().includes(q)) return true;
+    for (const v of Object.values(n.attrs)) if (String(v).toLowerCase().includes(q)) return true;
+    for (const c of n.children) if (check(c)) return true;
+    return false;
+  }
+  return check(node);
+}
+
+// ── Highlight ──────────────────────────────────────────────────────────────────
+function makeHl(query) {
+  return function hlText(text) {
+    if (text === null || text === undefined) return '';
+    const esc = String(text)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    if (!query) return esc;
+    const q = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return esc.replace(new RegExp('(' + q + ')', 'gi'), '<mark class="search-hl">$1</mark>');
+  };
+}
+
+// ── Path utilities ──────────────────────────────────────────────────────────────
+function normalizePath(path) {
+  return path.replace(/\[\d+\]/g, '[*]');
+}
+
+function pathToKey(path) {
+  const segs = path.replace(/\[\*\]/g, '').split('/').filter(Boolean);
+  const last = segs[segs.length - 1] || 'value';
+  return last.replace(/^@/, '');
+}
+
+function splitPathParts(fullPath) {
+  const parts = [];
+  const segs = fullPath.replace(/^\/[^/]+/, '').replace(/^\//, '').split('/');
+  for (const seg of segs) {
+    if (!seg) continue;
+    const m = seg.match(/^([^\[]+)(\[\*\])?$/);
+    if (m) { parts.push(m[1]); if (m[2]) parts.push('[*]'); }
+    else parts.push(seg);
+  }
+  return parts;
+}
+
+function nodeValue(n) {
+  if (n.text && !n.children.length) return n.text;
+  if (!n.text && !n.children.length) return '';
+  return n.text || null;
+}
+
+function walk(n, parts, defaultVal) {
+  if (!parts.length) return nodeValue(n);
+  const [head, ...rest] = parts;
+  if (head.startsWith('@')) { const v = n.attrs[head.slice(1)]; return v !== undefined ? v : defaultVal; }
+  if (head === '[*]') return n.children.map(c => walk(c, rest, defaultVal)).filter(v => v !== undefined);
+  const tagName = head.replace(/\[.*\]$/, '');
+  const matched = n.children.filter(c => c.tag === tagName);
+  if (!matched.length) return defaultVal;
+  if (rest.length && rest[0] === '[*]') return matched.map(c => walk(c, rest.slice(1), defaultVal)).filter(v => v !== undefined);
+  return walk(matched[0], rest, defaultVal);
+}
+
+// Evaluate a FULL path (includes root tag as first segment → stripped before walking).
+function evalPath(node, pathStr, defaultVal) {
+  const result = walk(node, splitPathParts(pathStr), defaultVal);
+  return result !== undefined ? result : defaultVal;
+}
+
+// Evaluate a RELATIVE path like "/name" or "/@id" — no root-stripping.
+function evalRelPath(node, relPath, defaultVal) {
+  if (!relPath) return nodeValue(node) ?? defaultVal;
+  const parts = [];
+  for (const seg of relPath.replace(/^\//, '').split('/')) {
+    if (!seg) continue;
+    const m = seg.match(/^([^\[]+)(\[\*\])?$/);
+    if (m) { parts.push(m[1]); if (m[2]) parts.push('[*]'); } else parts.push(seg);
+  }
+  const result = walk(node, parts, defaultVal);
+  return result !== undefined ? result : defaultVal;
+}
+
+// ── Extraction ─────────────────────────────────────────────────────────────────
+function extractRows(selectedPaths, pathDefaults, root) {
+  if (!selectedPaths.length) return [];
+  function arrayPrefix(p) { const i = p.indexOf('[*]'); return i === -1 ? null : p.slice(0, i + 3); }
+  const prefixes = selectedPaths.map(arrayPrefix);
+  const firstPrefix = prefixes[0];
+  const allSame = prefixes.every(p => p === firstPrefix);
+  function getDef(path) { const d = pathDefaults[path]; return (d !== undefined && d !== null && String(d).trim() !== '') ? String(d).trim() : undefined; }
+
+  if (!allSame || firstPrefix === null) {
+    const row = {};
+    selectedPaths.forEach(p => { const def = getDef(p); const val = evalPath(root, p, def); row[pathToKey(p)] = val !== undefined ? val : (def !== undefined ? def : null); });
+    return [row];
+  }
+
+  function getArray(n, parts) {
+    if (!parts.length) return [n];
+    const [h, ...rest] = parts;
+    const matched = n.children.filter(c => c.tag === h);
+    return rest.length ? matched.flatMap(c => getArray(c, rest)) : matched;
+  }
+  const items = getArray(root, splitPathParts(firstPrefix.replace(/\[\*\]$/, '')));
+
+  if (selectedPaths.length === 1) {
+    const rest = selectedPaths[0].slice(firstPrefix.length);
+    return items.map(item => { const def = getDef(selectedPaths[0]); const val = evalRelPath(item, rest, def); return val !== undefined ? val : (def ?? null); });
+  }
+
+  return items.map(item => {
+    const row = {};
+    selectedPaths.forEach(p => {
+      const rest = p.slice(firstPrefix.length);
+      const def = getDef(p);
+      const val = evalRelPath(item, rest, def);
+      row[pathToKey(p)] = val !== undefined ? val : (def ?? null);
+    });
+    return row;
+  });
+}
+
+// ── XML serialize ───────────────────────────────────────────────────────────────
+function escapeXml(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+}
+
+function rowsToXml(rows, rootTag, itemTag) {
+  const lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<' + rootTag + '>'];
+  for (const row of rows) {
+    if (typeof row !== 'object' || row === null) {
+      lines.push('  <' + itemTag + '>' + escapeXml(row) + '</' + itemTag + '>'); continue;
+    }
+    lines.push('  <' + itemTag + '>');
+    for (const [k, v] of Object.entries(row)) {
+      const safeK = (k || '_').replace(/[^a-zA-Z0-9_\-.]/g, '_').replace(/^(\d)/, '_$1') || '_f';
+      lines.push('    <' + safeK + '>' + escapeXml(v) + '</' + safeK + '>');
+    }
+    lines.push('  </' + itemTag + '>');
+  }
+  lines.push('</' + rootTag + '>');
+  return lines.join('\n');
+}
+
+// ── XmlNode component ───────────────────────────────────────────────────────────
+const XmlNode = {
+  name: 'XmlNode',
+  props: {
+    node:          { required: true },
+    path:          { type: String, required: true },
+    selectedPaths: { type: Array, required: true },
+    collapsedPaths:{ type: Array, required: true },
+    searchQuery:   { type: String, default: '' },
+    fieldCounts:   { type: Object, default: () => ({}) },
+  },
+  emits: ['select', 'toggle'],
+  setup(props, { emit }) {
+    const hasChildren = Vue.computed(() => !!(props.node.children && props.node.children.length));
+    const hasAttrs    = Vue.computed(() => Object.keys(props.node.attrs || {}).length > 0);
+    const isCollapsed = Vue.computed(() => props.collapsedPaths.includes(props.path));
+    const isSelected  = Vue.computed(() => props.selectedPaths.includes(normalizePath(props.path)));
+    const hl          = Vue.computed(() => makeHl(props.searchQuery));
+    // Is this node's own tag sometimes missing across the dataset?
+    const tagMissing  = Vue.computed(() => (props.fieldCounts[props.node.tag] ?? 0) > 0);
+
+    function childPath(child, idx) {
+      const same = props.node.children.filter(c => c.tag === child.tag);
+      return props.path + '/' + child.tag + (same.length > 1 ? '[' + idx + ']' : '');
+    }
+    function attrPath(key) { return props.path + '/@' + key; }
+    function isAttrSel(key) { return props.selectedPaths.includes(normalizePath(attrPath(key))); }
+    function attrMissing(key) { return (props.fieldCounts['@' + key] ?? 0) > 0; }
+    function onClick(e) { emit('select', { path: props.path, shift: e.shiftKey || e.ctrlKey || e.metaKey }); }
+    function onAttrClick(e, key) { e.stopPropagation(); emit('select', { path: attrPath(key), shift: e.shiftKey || e.ctrlKey || e.metaKey }); }
+    function onToggle(e) { e.stopPropagation(); emit('toggle', props.path); }
+
+    return { hasChildren, hasAttrs, isCollapsed, isSelected, hl, tagMissing, childPath, attrPath, isAttrSel, attrMissing, onClick, onAttrClick, onToggle };
+  },
+  components: {},
+  template: `
+    <div class="tree-node">
+      <span class="tree-row" :class="{ selected: isSelected }" @click="onClick">
+        <span v-if="hasChildren" class="toggle-btn" @click="onToggle">{{ isCollapsed ? '\u25b6' : '\u25bc' }}</span>
+        <span v-else class="no-toggle"></span>
+        <span class="xtag"
+          :style="tagMissing ? 'outline:1px solid rgba(251,191,36,.45);border-radius:3px;padding:0 2px;' : ''"
+          :title="tagMissing ? 'Sometimes missing in dataset' : ''"
+        >&lt;{{ node.tag }}<span v-if="tagMissing" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#fbbf24;margin-left:3px;vertical-align:middle;flex-shrink:0"></span></span>
+        <template v-if="hasAttrs">
+          <template v-for="(val, key) in node.attrs" :key="key">
+            &nbsp;<span class="xattr-key"
+              :style="(isAttrSel(key) ? 'background:var(--selected-bg);' : '') + (attrMissing(key) ? 'outline:1px solid rgba(251,191,36,.45);border-radius:3px;padding:0 2px;' : '')"
+              @click.stop="onAttrClick($event, key)"
+              :title="attrMissing(key) ? 'Sometimes missing in dataset' : 'Select attribute'"
+            >{{ key }}<span v-if="attrMissing(key)" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#fbbf24;margin-left:3px;vertical-align:middle"></span></span><span class="xmuted">="</span><span class="xattr-val" v-html="hl(val)"></span><span class="xmuted">"</span>
+          </template>
+        </template>
+        <span class="xtag" v-if="!hasChildren && !node.text">/&gt;</span>
+        <span class="xtag" v-else>&gt;</span>
+        <span v-if="node.text && !hasChildren" class="xtext" v-html="' ' + hl(node.text) + ' '"></span>
+        <span class="xtag" v-if="!hasChildren && node.text">&lt;/{{ node.tag }}&gt;</span>
+        <span v-if="hasChildren && isCollapsed" class="collapsed-hint">{{ node.children.length }} children\u2026</span>
+      </span>
+      <template v-if="hasChildren && !isCollapsed">
+        <div class="tree-indent">
+          <xml-node v-for="(child, idx) in node.children" :key="childPath(child, idx)"
+            :node="child" :path="childPath(child, idx)"
+            :selected-paths="selectedPaths" :collapsed-paths="collapsedPaths"
+            :search-query="searchQuery"
+            :field-counts="fieldCounts"
+            @select="$emit('select', $event)" @toggle="$emit('toggle', $event)"
+          ></xml-node>
+        </div>
+        <span class="xtag" style="margin-left:3px">&lt;/{{ node.tag }}&gt;</span>
+      </template>
+      <template v-else-if="hasChildren && isCollapsed">
+        <span class="xtag" style="margin-left:3px">&lt;/{{ node.tag }}&gt;</span>
+      </template>
+    </div>
+  `
+};
+XmlNode.components = { XmlNode };
+
+// ── App ─────────────────────────────────────────────────────────────────────────
+const { createApp, ref, computed, reactive, nextTick } = Vue;
+
+const app = createApp({
+  components: { XmlNode },
+  setup() {
+    const rawInput       = ref('');
+    const parsedRoot     = ref(null);
+    const parseError     = ref('');
+    const isDragging     = ref(false);
+    const fileInput      = ref(null);
+    const treeScroll     = ref(null);
+    const selectedPaths  = ref([]);
+    const collapsedPaths = ref([]);
+    const pathDefaults   = reactive({});
+    const running        = ref(false);
+    const extractFormat  = ref('');
+    const showExplainer  = ref(true);
+    const toast          = reactive({ visible: false, msg: '', type: 'success' });
+    const loadProgress   = ref(null);
+    const fileFullText   = ref(null);
+    const fileMeta       = ref(null);
+    const page           = ref(0);
+    const newColName     = ref('');
+    const newColDefault  = ref('');
+    const searchInput    = ref('');
+    const activeSearch   = ref('');
+    const searchResults  = ref([]);
+    const gotoRowInput   = ref('');
+    const fieldStats     = reactive({ counts: {}, total: 0 });
+    const previewMode    = ref('json');
+    let toastTimer = null;
+    const displayChars = DISPLAY_CHARS;
+
+    function showToast(msg, type = 'success', duration = 3000) {
+      clearTimeout(toastTimer);
+      Object.assign(toast, { msg, type, visible: true });
+      toastTimer = setTimeout(() => { toast.visible = false; }, duration);
+    }
+
+    // ── Auto-detected schema from first 200 items ──────────────────────────────
+    const autoPrefix = computed(() => {
+      if (!parsedRoot.value || !parsedRoot.value.children.length) return null;
+      return '/' + parsedRoot.value.tag + '/' + parsedRoot.value.children[0].tag + '[*]';
+    });
+
+    const knownFields = computed(() => {
+      if (!parsedRoot.value || !parsedRoot.value.children.length) return [];
+      const set = new Set();
+      parsedRoot.value.children.slice(0, 200).forEach(item => {
+        Object.keys(item.attrs).forEach(k => set.add('@' + k));
+        item.children.forEach(c => set.add(c.tag));
+      });
+      return [...set];
+    });
+
+    const knownFieldsDisplay = computed(() => knownFields.value.length ? JSON.stringify(knownFields.value, null, 2) : '');
+
+    async function copyKnownFields() {
+      if (!knownFields.value.length) return;
+      try { await navigator.clipboard.writeText(knownFieldsDisplay.value); showToast('✓ Fields copied'); }
+      catch { showToast('Copy failed', 'error'); }
+    }
+
+    // ── Field presence stats ───────────────────────────────────────────────────
+    function scanFieldStats(root) {
+      fieldStats.counts = {};
+      fieldStats.total = 0;
+      if (!root || !root.children.length) return;
+      const items = root.children;
+      fieldStats.total = items.length;
+      // collect all fields
+      const fieldSet = new Set();
+      items.slice(0, 500).forEach(item => {
+        Object.keys(item.attrs).forEach(k => fieldSet.add('@' + k));
+        item.children.forEach(c => fieldSet.add(c.tag));
+      });
+      const counts = {};
+      fieldSet.forEach(f => { counts[f] = 0; });
+      for (const item of items) {
+        for (const f of fieldSet) {
+          if (f.startsWith('@')) { if (item.attrs[f.slice(1)] === undefined) counts[f]++; }
+          else { if (!item.children.some(c => c.tag === f)) counts[f]++; }
+        }
+      }
+      fieldStats.counts = counts;
+    }
+
+    function fieldMissingCount(path) {
+      const key = pathToKey(path);
+      return fieldStats.counts[key] ?? 0;
+    }
+
+    // Returns true if this item node is missing any field that is sometimes missing across the dataset
+    function itemHasMissing(node) {
+      const counts = fieldStats.counts;
+      for (const f of Object.keys(counts)) {
+        if (counts[f] === 0) continue;
+        if (f.startsWith('@')) { if (node.attrs[f.slice(1)] === undefined) return true; }
+        else { if (!node.children.some(c => c.tag === f)) return true; }
+      }
+      return false;
+    }
+
+    function itemMissingTip(node) {
+      const counts = fieldStats.counts;
+      const missing = Object.keys(counts).filter(f => {
+        if (counts[f] === 0) return false;
+        if (f.startsWith('@')) return node.attrs[f.slice(1)] === undefined;
+        return !node.children.some(c => c.tag === f);
+      });
+      return 'Missing: ' + missing.join(', ');
+    }
+
+    // ── Search ─────────────────────────────────────────────────────────────────
+    function runSearch() {
+      const q = searchInput.value.trim();
+      if (!q || !parsedRoot.value) { if (!q) clearSearch(); return; }
+      activeSearch.value = q;
+      page.value = 0;
+      const items = parsedRoot.value.children;
+      const res = [];
+      for (let i = 0; i < items.length; i++) {
+        if (nodeMatchesSearch(items[i], q)) res.push(i);
+      }
+      searchResults.value = res;
+      nextTick(() => { if (treeScroll.value) treeScroll.value.scrollTop = 0; });
+    }
+
+    function clearSearch() {
+      searchInput.value = ''; activeSearch.value = ''; searchResults.value = []; page.value = 0;
+    }
+
+    // ── Pagination ─────────────────────────────────────────────────────────────
+    const totalVisible = computed(() => {
+      if (!parsedRoot.value) return 0;
+      return activeSearch.value ? searchResults.value.length : parsedRoot.value.children.length;
+    });
+
+    const visibleItems = computed(() => {
+      if (!parsedRoot.value) return [];
+      const all = parsedRoot.value.children;
+      const root = parsedRoot.value.tag;
+      let indices;
+      if (activeSearch.value) {
+        indices = searchResults.value.slice(page.value * PAGE_SIZE, (page.value + 1) * PAGE_SIZE);
+      } else {
+        const start = page.value * PAGE_SIZE;
+        indices = [];
+        for (let i = start; i < Math.min(start + PAGE_SIZE, all.length); i++) indices.push(i);
+      }
+      return indices.map(idx => ({
+        node: all[idx],
+        path: '/' + root + '/' + all[idx].tag + '[' + idx + ']',
+        __key: idx,
+      }));
+    });
+
+    const pageLabel = computed(() => {
+      const total = totalVisible.value;
+      if (!total) return activeSearch.value ? '0 matches' : '0 rows';
+      const s = page.value * PAGE_SIZE + 1;
+      const e = Math.min((page.value + 1) * PAGE_SIZE, total);
+      return s.toLocaleString() + '–' + e.toLocaleString() + ' of ' + total.toLocaleString();
+    });
+
+    function prevPage() { if (page.value > 0) { page.value--; scrollTop(); } }
+    function nextPage() { if ((page.value + 1) * PAGE_SIZE < totalVisible.value) { page.value++; scrollTop(); } }
+    function scrollTop() { nextTick(() => { if (treeScroll.value) treeScroll.value.scrollTop = 0; }); }
+
+    function jumpToRow() {
+      const n = parseInt(gotoRowInput.value);
+      if (isNaN(n) || n < 1) return;
+      // n is 1-based absolute item index; convert to page in current view
+      if (activeSearch.value) {
+        // find the search result closest to index n-1
+        const absIdx = n - 1;
+        const pos = searchResults.value.findIndex(i => i >= absIdx);
+        page.value = pos === -1 ? Math.max(0, Math.ceil(searchResults.value.length / PAGE_SIZE) - 1) : Math.floor(pos / PAGE_SIZE);
+      } else {
+        page.value = Math.floor((n - 1) / PAGE_SIZE);
+      }
+      scrollTop();
+    }
+
+    // ── Attribute sample (first record) for the available-fields box ─────────
+    const attrSampleLines = computed(() => {
+      if (!parsedRoot.value || !parsedRoot.value.children.length) return [];
+      const item = parsedRoot.value.children[0];
+      const lines = [];
+      for (const [k, v] of Object.entries(item.attrs)) lines.push({ k: '@' + k, v });
+      for (const child of item.children) lines.push({ k: child.tag, v: child.text || (child.children.length ? '…' : '') });
+      return lines;
+    });
+
+    const attrSampleHtml = computed(() => {
+      return attrSampleLines.value.map(({ k, v }) =>
+        '<span style="color:var(--attr-key)">' + k.replace(/</g,'&lt;') + '</span>' +
+        '<span style="color:var(--muted)">: </span>' +
+        '<span style="color:var(--attr-val)">' + String(v).replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>'
+      ).join('\n');
+    });
+
+    // ── Live preview ───────────────────────────────────────────────────────────
+    const previewSample = computed(() => {
+      if (!selectedPaths.value.length || !parsedRoot.value) return null;
+      try {
+        const rows = extractRows(selectedPaths.value, pathDefaults, parsedRoot.value);
+        const sample = rows.slice(0, 3);
+        const rt = parsedRoot.value.tag;
+        const it = parsedRoot.value.children[0]?.tag || 'item';
+        return {
+          json: JSON.stringify(sample, null, 2),
+          xml: rowsToXml(sample, rt, it),
+          totalRows: rows.length,
+          truncated: rows.length > 3,
+          error: null,
+        };
+      } catch (e) {
+        return { error: e.message, json: null, xml: null, totalRows: 0, truncated: false };
+      }
+    });
+
+    // ── Select all / Add column ────────────────────────────────────────────────
+    function selectAllColumns() {
+      const prefix = autoPrefix.value;
+      if (!prefix || !knownFields.value.length) return;
+      const toAdd = knownFields.value.map(f => prefix + '/' + f);
+      const existing = new Set(selectedPaths.value);
+      const fresh = toAdd.filter(p => !existing.has(p));
+      if (fresh.length) selectedPaths.value = [...selectedPaths.value, ...fresh];
+    }
+
+    function addNewColumn() {
+      const raw = newColName.value.trim();
+      if (!raw) return;
+      const name = raw.replace(/[^a-zA-Z0-9_\-.]/g, '_').replace(/^(\d)/, '_$1') || '_col';
+      let prefix = null;
+      for (const p of selectedPaths.value) { const i = p.indexOf('[*]'); if (i !== -1) { prefix = p.slice(0, i + 3); break; } }
+      if (!prefix) prefix = autoPrefix.value;
+      if (!prefix) { showToast('Parse an XML file first', 'error'); return; }
+      const newPath = prefix + '/' + name;
+      if (!selectedPaths.value.includes(newPath)) selectedPaths.value = [...selectedPaths.value, newPath];
+      if (newColDefault.value.trim()) pathDefaults[newPath] = newColDefault.value.trim();
+      newColName.value = ''; newColDefault.value = '';
+    }
+
+    // ── Parse / load ───────────────────────────────────────────────────────────
+    function parseXML() {
+      parseError.value = '';
+      try {
+        parsedRoot.value = parseXMLText(fileFullText.value ?? rawInput.value);
+        selectedPaths.value = []; collapsedPaths.value = [];
+        Object.keys(pathDefaults).forEach(k => delete pathDefaults[k]);
+        page.value = 0; clearSearch();
+        scanFieldStats(parsedRoot.value);
+      } catch (e) { parseError.value = e.message; parsedRoot.value = null; }
+    }
+
+    function triggerFileInput() { fileInput.value && fileInput.value.click(); }
+
+    function onFileChange(e) { const f = e.target.files[0]; if (f) readFile(f); e.target.value = ''; }
+    function onDrop(e) { isDragging.value = false; const f = e.dataTransfer.files[0]; if (f) readFile(f); }
+
+    function readFile(file) {
+      const big = file.size > DISPLAY_SIZE_LIMIT;
+      if (big) loadProgress.value = 0;
+      const reader = new FileReader();
+      if (big) reader.onprogress = ev => { if (ev.lengthComputable) loadProgress.value = Math.min(99, Math.round(ev.loaded / ev.total * 100)); };
+      reader.onload = ev => {
+        loadProgress.value = big ? 100 : null;
+        const text = ev.target.result;
+        setTimeout(() => {
+          if (big) { fileFullText.value = text; rawInput.value = text.slice(0, DISPLAY_CHARS); fileMeta.value = { name: file.name, sizeMB: (file.size/1048576).toFixed(2), truncated: true }; }
+          else { fileFullText.value = null; fileMeta.value = { name: file.name, sizeMB: (file.size/1048576).toFixed(2), truncated: false }; rawInput.value = text; }
+          parseXML(); loadProgress.value = null;
+        }, 30);
+      };
+      reader.onerror = () => { loadProgress.value = null; parseError.value = 'Failed to read file'; };
+      reader.readAsText(file);
+    }
+
+    function onTextareaInput() { fileFullText.value = null; fileMeta.value = null; }
+
+    function onNodeSelect({ path, shift }) {
+      const np = normalizePath(path);
+      if (!shift) {
+        selectedPaths.value = selectedPaths.value.length === 1 && selectedPaths.value[0] === np ? [] : [np];
+      } else {
+        const idx = selectedPaths.value.indexOf(np);
+        selectedPaths.value = idx >= 0 ? selectedPaths.value.filter((_, i) => i !== idx) : [...selectedPaths.value, np];
+      }
+    }
+
+    function onToggle(path) {
+      const idx = collapsedPaths.value.indexOf(path);
+      collapsedPaths.value = idx >= 0 ? collapsedPaths.value.filter((_, i) => i !== idx) : [...collapsedPaths.value, path];
+    }
+
+    function removePath(i) { selectedPaths.value = selectedPaths.value.filter((_, j) => j !== i); }
+    function clearSelections() { selectedPaths.value = []; Object.keys(pathDefaults).forEach(k => delete pathDefaults[k]); }
+
+    // ── Extraction ─────────────────────────────────────────────────────────────
+    async function runExtraction(format) {
+      if (!selectedPaths.value.length || !parsedRoot.value) return;
+      running.value = true; extractFormat.value = format;
+      try {
+        const rows = extractRows(selectedPaths.value, pathDefaults, parsedRoot.value);
+        let blob, filename;
+        if (format === 'xml') {
+          const rt = parsedRoot.value.tag;
+          const it = parsedRoot.value.children[0]?.tag || 'item';
+          blob = new Blob([rowsToXml(rows, rt, it)], { type: 'application/xml' });
+          filename = 'xml-output.xml';
+        } else {
+          blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json' });
+          filename = 'xml-output.json';
+        }
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+        const n = Array.isArray(rows) ? rows.length : 1;
+        showToast('✓ Downloaded ' + n + ' row' + (n !== 1 ? 's' : '') + ' — ' + filename);
+      } catch (e) { showToast('Error: ' + e.message, 'error', 5000); }
+      running.value = false; extractFormat.value = '';
+    }
+
+    return {
+      rawInput, parsedRoot, parseError, isDragging, fileInput, treeScroll,
+      selectedPaths, collapsedPaths, pathDefaults,
+      running, extractFormat, toast, loadProgress, fileMeta, displayChars,
+      page, PAGE_SIZE, totalVisible, visibleItems, pageLabel,
+      searchInput, activeSearch, searchResults, gotoRowInput,
+      newColName, newColDefault,
+      knownFields, knownFieldsDisplay, previewSample, previewMode,
+      attrSampleLines, attrSampleHtml,
+      fieldStats, fieldMissingCount, itemHasMissing, itemMissingTip,
+      showExplainer,
+      parseXML, triggerFileInput, onFileChange, onDrop, onTextareaInput,
+      onNodeSelect, onToggle, removePath, clearSelections,
+      runSearch, clearSearch, jumpToRow, prevPage, nextPage,
+      selectAllColumns, addNewColumn, copyKnownFields,
+      runExtraction, pathToKey,
+    };
+  }
+});
+
+app.mount('#app');
+</script>
+</body>
+</html>
