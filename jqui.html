@@ -449,6 +449,32 @@
     .empty-icon { font-size: 3rem; }
     .empty-label { font-size: 0.88rem; line-height: 1.6; }
 
+    /* ── FILE LOAD PROGRESS ── */
+    .load-progress-wrap {
+      margin: 8px 16px 4px;
+      display: flex; flex-direction: column; gap: 5px;
+    }
+    .load-progress-bar {
+      height: 5px; background: var(--surface3); border-radius: 99px; overflow: hidden;
+    }
+    .load-progress-fill {
+      height: 100%; border-radius: 99px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      transition: width 0.12s ease;
+    }
+    .load-progress-label {
+      font-size: 0.73rem; color: var(--muted); text-align: center;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .file-truncated-notice {
+      margin: 0 16px 4px;
+      font-size: 0.71rem; color: var(--muted);
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 5px 10px;
+      line-height: 1.45;
+    }
+    .file-truncated-notice strong { color: var(--accent2); }
+
     .badge {
       display: inline-flex; align-items: center; justify-content: center;
       background: var(--accent); color: #fff;
@@ -483,15 +509,37 @@
           a <code style="color:var(--accent2)">.json</code> file here
         </div>
       </div>
+
+      <!-- File load progress -->
+      <div v-if="loadProgress !== null" class="load-progress-wrap">
+        <div class="load-progress-bar">
+          <div class="load-progress-fill" :style="{ width: loadProgress + '%' }"></div>
+        </div>
+        <div class="load-progress-label">
+          <span class="spinner"></span>
+          Loading&hellip; {{ loadProgress }}%
+        </div>
+      </div>
+
       <div class="or-divider">or paste JSON below</div>
+
+      <!-- Large-file truncation notice -->
+      <div v-if="fileMeta && fileMeta.truncated" class="file-truncated-notice">
+        📄 <strong>{{ fileMeta.name }}</strong> ({{ fileMeta.sizeMB }}&nbsp;MB) &mdash;
+        showing first {{ displayChars.toLocaleString() }}&nbsp;chars in editor;
+        <strong>full file used for extraction</strong>
+      </div>
+
       <textarea
         class="json-textarea"
         v-model="rawInput"
+        @input="onTextareaInput"
+        :disabled="loadProgress !== null"
         placeholder='{ "example": [1, 2, 3], "nested": { "key": "value" } }'
         spellcheck="false"
       ></textarea>
       <div v-if="parseError" class="error-box">⚠ {{ parseError }}</div>
-      <button class="parse-btn" @click="parseJSON">Parse JSON →</button>
+      <button class="parse-btn" @click="parseJSON" :disabled="loadProgress !== null">Parse JSON →</button>
     </div>
 
     <!-- MIDDLE: Tree Viewer -->
@@ -585,9 +633,11 @@
 
 <script>
 // ── Config ───────────────────────────────────────────────────────────────────
-const RENDER_LIMIT_STEP  = 50;  // items revealed per "show more" click
-const AUTO_COLLAPSE_SIZE = 30;  // auto-collapse nodes with more children than this
-const AUTO_COLLAPSE_DEPTH = 3;  // auto-collapse nodes at this depth and beyond
+const RENDER_LIMIT_STEP   = 50;        // items revealed per "show more" click
+const AUTO_COLLAPSE_SIZE  = 30;        // auto-collapse nodes with more children than this
+const AUTO_COLLAPSE_DEPTH = 3;         // auto-collapse nodes at this depth and beyond
+const DISPLAY_SIZE_LIMIT  = 200*1024;  // files larger than this are truncated in the textarea
+const DISPLAY_CHARS       = 8000;      // characters to show in textarea for large files
 
 // ── jq-web via CDN (asm.js build, no WASM needed, works everywhere) ──────────
 const JQ_CDN = 'https://cdn.jsdelivr.net/npm/jq-web@0.3.1/jq.asm.js';
@@ -965,6 +1015,10 @@ const app = createApp({
     const collapsedPaths = ref([]);
     const running = ref(false);
     const toast   = Vue.reactive({ visible: false, msg: '', type: 'success' });
+    const loadProgress = ref(null); // null = idle, 0–100 = reading file
+    const fileFullText = ref(null); // full text when file is too large to show entirely
+    const fileMeta     = ref(null); // { name, sizeMB, truncated }
+    const displayChars = DISPLAY_CHARS;
     let toastTimer = null;
 
     function showToast(msg, type = 'success', duration = 3000) {
@@ -1004,8 +1058,10 @@ const app = createApp({
 
     function parseJSON() {
       parseError.value = '';
+      // Use full file text when available (large-file path), otherwise textarea content
+      const src = fileFullText.value ?? rawInput.value;
       try {
-        parsedData.value = JSON.parse(rawInput.value.trim());
+        parsedData.value = JSON.parse(src.trim());
         selectedPaths.value  = [];
         collapsedPaths.value = []; // start fully expanded
       } catch (e) {
@@ -1014,7 +1070,12 @@ const app = createApp({
       }
     }
 
-    function loadText(text) { rawInput.value = text; parseJSON(); }
+    function loadText(text) {
+      fileFullText.value = null;
+      fileMeta.value = null;
+      rawInput.value = text;
+      parseJSON();
+    }
 
     function triggerFileInput() { fileInput.value && fileInput.value.click(); }
 
@@ -1031,9 +1092,53 @@ const app = createApp({
     }
 
     function readFile(file) {
+      const isLarge = file.size > DISPLAY_SIZE_LIMIT;
+      if (isLarge) loadProgress.value = 0;
+
       const reader = new FileReader();
-      reader.onload = ev => loadText(ev.target.result);
+
+      if (isLarge) {
+        reader.onprogress = e => {
+          if (e.lengthComputable)
+            loadProgress.value = Math.min(99, Math.round((e.loaded / e.total) * 100));
+        };
+      }
+
+      reader.onload = ev => {
+        loadProgress.value = isLarge ? 100 : null;
+        const text = ev.target.result;
+        // Small timeout so the browser can paint 100% before the synchronous JSON.parse blocks
+        setTimeout(() => {
+          if (isLarge) {
+            fileFullText.value = text;
+            rawInput.value = text.slice(0, DISPLAY_CHARS);
+            fileMeta.value = {
+              name: file.name,
+              sizeMB: (file.size / 1048576).toFixed(2),
+              truncated: true,
+            };
+          } else {
+            fileFullText.value = null;
+            fileMeta.value = { name: file.name, sizeMB: (file.size / 1048576).toFixed(2), truncated: false };
+            rawInput.value = text;
+          }
+          parseJSON();
+          loadProgress.value = null;
+        }, 30);
+      };
+
+      reader.onerror = () => {
+        loadProgress.value = null;
+        parseError.value = 'Failed to read file';
+      };
+
       reader.readAsText(file);
+    }
+
+    function onTextareaInput() {
+      // User is manually editing — detach from any loaded file
+      fileFullText.value = null;
+      fileMeta.value = null;
     }
 
     function onNodeSelect({ path, shift }) {
@@ -1140,8 +1245,9 @@ const app = createApp({
     return {
       rawInput, parsedData, parseError, isDragging, fileInput,
       selectedPaths, collapsedPaths, jqFilter, previewSample, running, toast,
+      loadProgress, fileMeta, displayChars,
       levelKeys, levelKeysDisplay, copyLevelKeys,
-      parseJSON, triggerFileInput, onFileChange, onDrop,
+      parseJSON, triggerFileInput, onFileChange, onDrop, onTextareaInput,
       onNodeSelect, onToggle, removePath, clearSelections,
       runExtraction,
     };
