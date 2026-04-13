@@ -1,0 +1,1154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>jq UI</title>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --surface3: #2a2f47;
+      --border: #2e3352;
+      --accent: #7c6af7;
+      --accent2: #a78bfa;
+      --accent-glow: rgba(124,106,247,0.25);
+      --green: #34d399;
+      --green-dim: rgba(52,211,153,0.15);
+      --yellow: #fbbf24;
+      --red: #f87171;
+      --text: #e2e8f0;
+      --muted: #6b7280;
+      --selected-bg: rgba(124,106,247,0.22);
+      --hover-bg: rgba(124,106,247,0.10);
+      --string: #86efac;
+      --number: #93c5fd;
+      --bool: #fda4af;
+      --null: #94a3b8;
+      --key: #c4b5fd;
+      --radius: 12px;
+      --radius-sm: 6px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── TOP HEADER ── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 18px 32px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .logo {
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      color: var(--accent2);
+    }
+    .logo span { color: var(--text); }
+    .subtitle { color: var(--muted); font-size: 0.82rem; }
+
+    /* ── MAIN LAYOUT ── */
+    .main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+      height: calc(100vh - 61px);
+    }
+
+    /* ── LEFT PANEL (input) ── */
+    .left-panel {
+      width: 420px;
+      min-width: 320px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .panel-header {
+      padding: 16px 20px 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+    .drop-zone {
+      margin: 16px;
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 28px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      transition: border-color 0.2s, background 0.2s;
+      cursor: pointer;
+      position: relative;
+    }
+    .drop-zone.dragging {
+      border-color: var(--accent);
+      background: var(--accent-glow);
+    }
+    .drop-zone input[type=file] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .drop-icon {
+      font-size: 2rem;
+      line-height: 1;
+    }
+    .drop-label { font-size: 0.85rem; color: var(--muted); text-align: center; }
+    .drop-label strong { color: var(--accent2); cursor: pointer; }
+
+    .or-divider {
+      display: flex; align-items: center; gap: 10px;
+      margin: 0 16px;
+      color: var(--muted); font-size: 0.78rem;
+    }
+    .or-divider::before, .or-divider::after {
+      content: ''; flex: 1; height: 1px; background: var(--border);
+    }
+
+    .json-textarea {
+      flex: 1;
+      margin: 12px 16px 16px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px;
+      color: var(--text);
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.78rem;
+      line-height: 1.6;
+      resize: none;
+      outline: none;
+      transition: border-color 0.2s;
+      min-height: 160px;
+    }
+    .json-textarea:focus { border-color: var(--accent); }
+    .json-textarea::placeholder { color: var(--muted); }
+    .parse-btn {
+      margin: 0 16px 16px;
+      padding: 11px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border: none;
+      border-radius: var(--radius-sm);
+      color: #fff;
+      font-weight: 700;
+      font-size: 0.88rem;
+      cursor: pointer;
+      letter-spacing: 0.03em;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .parse-btn:hover { opacity: 0.9; }
+    .parse-btn:active { transform: scale(0.98); }
+    .error-box {
+      margin: 0 16px 12px;
+      background: rgba(248,113,113,0.12);
+      border: 1px solid rgba(248,113,113,0.35);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      font-size: 0.78rem;
+      color: var(--red);
+      font-family: monospace;
+    }
+
+    /* ── MIDDLE PANEL (tree viewer) ── */
+    .mid-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg);
+    }
+    .mid-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface);
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .mid-header-left { display: flex; align-items: center; gap: 12px; }
+    .mid-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    .hint { font-size: 0.72rem; color: var(--muted); }
+    .hint kbd {
+      background: var(--surface3);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-family: monospace;
+      font-size: 0.7rem;
+      color: var(--text);
+    }
+    .tree-scroll {
+      flex: 1;
+      overflow: auto;
+      padding: 14px 8px 14px 14px;
+    }
+    /* ── JSON TREE ── */
+    .tree-node {
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.8rem;
+      line-height: 1.8;
+      user-select: none;
+    }
+    .tree-row {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 0px;
+      border-radius: 4px;
+      padding: 0 3px;
+      cursor: pointer;
+      transition: background 0.12s;
+      white-space: nowrap;
+    }
+    .tree-row:hover { background: var(--hover-bg); }
+    .tree-row.selected { background: var(--selected-bg); outline: 1px solid rgba(124,106,247,0.5); }
+    .tree-indent { display: inline-block; padding-left: 22px; }
+    .toggle-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      margin-right: 4px;
+      border-radius: 3px;
+      color: var(--muted);
+      font-size: 0.65rem;
+      flex-shrink: 0;
+      background: var(--surface3);
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .toggle-btn:hover { background: var(--accent); color: #fff; }
+    .no-toggle { display: inline-block; width: 20px; }
+    .jkey { color: var(--key); }
+    .colon { color: var(--muted); margin: 0 3px; }
+    .jstring { color: var(--string); }
+    .jnumber { color: var(--number); }
+    .jbool { color: var(--bool); }
+    .jnull { color: var(--null); }
+    .jbrace { color: var(--muted); }
+    .collapsed-hint { color: var(--muted); font-style: italic; font-size: 0.72rem; margin-left: 4px; }
+    .array-idx { color: var(--muted); font-size: 0.7rem; margin-right: 4px; }
+    /* ── RIGHT PANEL (selection + output) ── */
+    .right-panel {
+      width: 360px;
+      min-width: 280px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .selections-area {
+      flex: 1;
+      overflow: auto;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .no-sel { color: var(--muted); font-size: 0.82rem; padding: 4px 0; }
+    .sel-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px 12px;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.78rem;
+      color: var(--accent2);
+      cursor: default;
+    }
+    .sel-chip .remove-btn {
+      margin-left: auto;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+      transition: color 0.15s;
+      background: none; border: none; padding: 0;
+    }
+    .sel-chip .remove-btn:hover { color: var(--red); }
+    .sel-chip .jq-path { flex: 1; word-break: break-all; }
+    .right-footer {
+      padding: 14px 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .jq-preview {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.75rem;
+      color: var(--green);
+      word-break: break-all;
+      min-height: 36px;
+    }
+    .jq-preview .label {
+      color: var(--muted);
+      display: block;
+      font-size: 0.68rem;
+      margin-bottom: 4px;
+      font-family: sans-serif;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+    .finish-btn {
+      padding: 12px;
+      background: linear-gradient(135deg, var(--green) 0%, #059669 100%);
+      border: none;
+      border-radius: var(--radius-sm);
+      color: #fff;
+      font-weight: 700;
+      font-size: 0.9rem;
+      cursor: pointer;
+      letter-spacing: 0.03em;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .finish-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .finish-btn:not(:disabled):hover { opacity: 0.9; }
+    .finish-btn:not(:disabled):active { transform: scale(0.98); }
+    /* ── KEYS BOX ── */
+    .keys-box {
+      position: relative;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+    }
+    .keys-box-label {
+      display: block;
+      font-size: 0.68rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--muted); font-family: sans-serif;
+      margin-bottom: 6px;
+    }
+    .keys-copy-btn {
+      position: absolute;
+      top: 8px; right: 8px;
+      padding: 3px 9px;
+      background: var(--surface3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--muted); font-size: 0.7rem;
+      cursor: pointer; font-family: sans-serif;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .keys-copy-btn:hover {
+      border-color: var(--accent); color: var(--accent2);
+      background: var(--accent-glow);
+    }
+    .keys-list {
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.73rem; line-height: 1.5;
+      color: var(--key); white-space: pre;
+      overflow: auto; max-height: 130px;
+      padding-right: 56px;
+    }
+
+    /* ── OUTPUT PREVIEW ── */
+    .output-preview {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      display: flex; flex-direction: column; gap: 5px;
+    }
+    .output-preview .prev-label {
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .output-preview .prev-label span {
+      font-size: 0.68rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--muted); font-family: sans-serif;
+    }
+    .output-preview .prev-count {
+      font-size: 0.68rem; color: var(--muted); font-style: italic;
+      font-family: sans-serif; font-weight: 400; text-transform: none; letter-spacing: 0;
+    }
+    .preview-code {
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.73rem; line-height: 1.55;
+      color: var(--green); white-space: pre;
+      overflow: auto; max-height: 160px;
+    }
+    .preview-code.is-error { color: var(--red); }
+
+    /* ── TOAST ── */
+    .toast {
+      position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+      padding: 11px 22px; border-radius: var(--radius-sm);
+      font-size: 0.85rem; font-weight: 600;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+      z-index: 200; pointer-events: none;
+      transition: opacity 0.3s;
+    }
+    .toast.success { background: #064e3b; border: 1px solid var(--green); color: var(--green); }
+    .toast.error   { background: #450a0a; border: 1px solid var(--red);   color: var(--red);   }
+    .toast-enter-active, .toast-leave-active { transition: opacity 0.3s; }
+    .toast-enter-from, .toast-leave-to { opacity: 0; }
+    /* ── SHOW MORE ── */
+    .show-more-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin: 2px 0 2px 2px;
+      padding: 2px 10px;
+      background: var(--surface3); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); color: var(--muted);
+      font-family: 'JetBrains Mono','Fira Code',monospace;
+      font-size: 0.72rem; cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .show-more-btn:hover { border-color: var(--accent); color: var(--accent2); }
+
+    /* scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--border); }
+
+    /* loading spinner */
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle; margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      flex: 1; gap: 14px; color: var(--muted); padding: 40px 20px; text-align: center;
+    }
+    .empty-icon { font-size: 3rem; }
+    .empty-label { font-size: 0.88rem; line-height: 1.6; }
+
+    .badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      background: var(--accent); color: #fff;
+      font-size: 0.65rem; font-weight: 700;
+      border-radius: 99px; padding: 1px 7px; min-width: 18px; height: 18px;
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo">jq<span>UI</span></div>
+    <div class="subtitle">Interactive jq query builder — click elements to build your filter</div>
+  </header>
+
+  <div class="main">
+    <!-- LEFT: JSON Input -->
+    <div class="left-panel">
+      <div class="panel-header">JSON Input</div>
+      <div
+        class="drop-zone"
+        :class="{ dragging: isDragging }"
+        @dragover.prevent="isDragging = true"
+        @dragleave.prevent="isDragging = false"
+        @drop.prevent="onDrop"
+        @click="triggerFileInput"
+      >
+        <input ref="fileInput" type="file" accept=".json,application/json" @change="onFileChange" style="display:none" />
+        <div class="drop-icon">📂</div>
+        <div class="drop-label">
+          <strong>Click to browse</strong> or drag &amp; drop<br />
+          a <code style="color:var(--accent2)">.json</code> file here
+        </div>
+      </div>
+      <div class="or-divider">or paste JSON below</div>
+      <textarea
+        class="json-textarea"
+        v-model="rawInput"
+        placeholder='{ "example": [1, 2, 3], "nested": { "key": "value" } }'
+        spellcheck="false"
+      ></textarea>
+      <div v-if="parseError" class="error-box">⚠ {{ parseError }}</div>
+      <button class="parse-btn" @click="parseJSON">Parse JSON →</button>
+    </div>
+
+    <!-- MIDDLE: Tree Viewer -->
+    <div class="mid-panel">
+      <div class="mid-header">
+        <div class="mid-header-left">
+          <div class="mid-title">JSON Explorer</div>
+          <div v-if="parsedData !== null" class="hint">
+            <kbd>click</kbd> select column <span style="color:var(--accent2);font-weight:700">[*]</span>
+            &nbsp; <kbd>ctrl+click</kbd> multi-col
+          </div>
+        </div>
+        <div v-if="selectedPaths.length" style="display:flex;align-items:center;gap:8px;">
+          <span class="badge">{{ selectedPaths.length }}</span>
+          <span style="font-size:0.75rem;color:var(--muted)">selected</span>
+        </div>
+      </div>
+      <div class="tree-scroll" v-if="parsedData !== null">
+        <div class="tree-node">
+          <tree-node
+            :data="parsedData"
+            :path="''"
+            :selected-paths="selectedPaths"
+            :collapsed-paths="collapsedPaths"
+            @select="onNodeSelect"
+            @toggle="onToggle"
+          ></tree-node>
+        </div>
+      </div>
+      <div class="empty-state" v-else>
+        <div class="empty-icon">🔍</div>
+        <div class="empty-label">Paste or upload JSON on the left,<br />then explore it here interactively.</div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Selection + Finish -->
+    <div class="right-panel">
+      <div class="panel-header" style="display:flex;align-items:center;gap:8px;">
+        Selected Paths
+        <span v-if="selectedPaths.length" class="badge">{{ selectedPaths.length }}</span>
+        <button v-if="selectedPaths.length" @click="clearSelections" style="margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:0.75rem;text-decoration:underline;">clear all</button>
+      </div>
+      <div class="selections-area">
+        <div v-if="!selectedPaths.length" class="no-sel">No paths selected yet. Click nodes in the tree.</div>
+        <div
+          v-for="(p, i) in selectedPaths"
+          :key="p"
+          class="sel-chip"
+        >
+          <span class="jq-path">{{ p || '.' }}</span>
+          <button class="remove-btn" @click="removePath(i)" title="Remove">×</button>
+        </div>
+      </div>
+      <div class="right-footer">
+        <div class="jq-preview">
+          <span class="label">jq filter</span>
+          {{ jqFilter || '—' }}
+        </div>
+        <div v-if="levelKeys" class="keys-box">
+          <span class="keys-box-label">Keys at level</span>
+          <button class="keys-copy-btn" @click="copyLevelKeys" title="Copy keys">⎘ Copy</button>
+          <pre class="keys-list">{{ levelKeysDisplay }}</pre>
+        </div>
+        <div v-if="previewSample" class="output-preview">
+          <div class="prev-label">
+            <span>Output preview</span>
+            <span v-if="!previewSample.error" class="prev-count">
+              <template v-if="previewSample.truncated">first 3 of {{ previewSample.totalRows.toLocaleString() }} rows</template>
+              <template v-else>{{ previewSample.totalRows.toLocaleString() }} row{{ previewSample.totalRows !== 1 ? 's' : '' }}</template>
+            </span>
+          </div>
+          <pre class="preview-code" :class="{ 'is-error': previewSample.error }">{{ previewSample.error ? '⚠ ' + previewSample.error : previewSample.json }}</pre>
+        </div>
+        <button
+          class="finish-btn"
+          :disabled="!selectedPaths.length || parsedData === null"
+          @click="runExtraction"
+        >
+          <span v-if="running"><span class="spinner"></span>Running…</span>
+          <span v-else>▶ Extract with jq</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <transition name="toast">
+    <div v-if="toast.visible" class="toast" :class="toast.type">{{ toast.msg }}</div>
+  </transition>
+</div>
+
+<script>
+// ── Config ───────────────────────────────────────────────────────────────────
+const RENDER_LIMIT_STEP  = 50;  // items revealed per "show more" click
+const AUTO_COLLAPSE_SIZE = 30;  // auto-collapse nodes with more children than this
+const AUTO_COLLAPSE_DEPTH = 3;  // auto-collapse nodes at this depth and beyond
+
+// ── jq-web via CDN (asm.js build, no WASM needed, works everywhere) ──────────
+const JQ_CDN = 'https://cdn.jsdelivr.net/npm/jq-web@0.3.1/jq.asm.js';
+
+let jqPromise = null;
+
+function loadJq() {
+  if (jqPromise) return jqPromise;
+  jqPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = JQ_CDN;
+    script.onload = () => {
+      // jq-web exposes window.jq with a .promised API
+      if (window.jq && window.jq.promised) {
+        resolve(window.jq.promised);
+      } else if (window.jq) {
+        resolve(window.jq);
+      } else {
+        reject(new Error('jq-web did not expose jq global'));
+      }
+    };
+    script.onerror = () => reject(new Error('Failed to load jq-web from CDN'));
+    document.head.appendChild(script);
+  });
+  return jqPromise;
+}
+
+// Fallback pure-JS evaluator for simple jq paths like .foo, .foo.bar, .foo[0]
+function evalSimpleJq(filter, data) {
+  try {
+    if (filter.trim() === '.' || filter.trim() === '') return JSON.stringify(data, null, 2);
+
+    // Handle array construction: [.a, .b]
+    const arrayMatch = filter.trim().match(/^\[(.+)\]$/);
+    if (arrayMatch) {
+      const parts = splitTopLevel(arrayMatch[1]);
+      const results = parts.map(p => evalSimpleJqPath(p.trim(), data));
+      return JSON.stringify(results, null, 2);
+    }
+
+    return JSON.stringify(evalSimpleJqPath(filter.trim(), data), null, 2);
+  } catch (e) {
+    return '(error: ' + e.message + ')';
+  }
+}
+
+function splitTopLevel(str) {
+  const parts = []; let depth = 0; let current = '';
+  for (const ch of str) {
+    if (ch === '[' || ch === '{' || ch === '(') depth++;
+    else if (ch === ']' || ch === '}' || ch === ')') depth--;
+    if (ch === ',' && depth === 0) { parts.push(current); current = ''; }
+    else current += ch;
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
+function evalSimpleJqPath(filter, data) {
+  // Walk path like .a.b[0].c
+  let current = data;
+  if (filter === '.') return current;
+  const stripped = filter.startsWith('.') ? filter.slice(1) : filter;
+  if (!stripped) return current;
+
+  // Tokenize: split on . but respect [] brackets
+  const tokens = [];
+  let tok = '';
+  for (let i = 0; i < stripped.length; i++) {
+    const ch = stripped[i];
+    if (ch === '[') {
+      if (tok) { tokens.push({ type: 'key', val: tok }); tok = ''; }
+      let idx = '';
+      i++;
+      while (i < stripped.length && stripped[i] !== ']') idx += stripped[i++];
+      tokens.push({ type: 'index', val: isNaN(idx) ? idx.replace(/^["']|["']$/g, '') : parseInt(idx) });
+    } else if (ch === '.') {
+      if (tok) { tokens.push({ type: 'key', val: tok }); tok = ''; }
+    } else {
+      tok += ch;
+    }
+  }
+  if (tok) tokens.push({ type: 'key', val: tok });
+
+  for (const t of tokens) {
+    if (current == null) return null;
+    if (t.type === 'key') current = current[t.val];
+    else current = current[t.val];
+  }
+  return current;
+}
+
+// ── TreeNode component ───────────────────────────────────────────────────────
+const TreeNode = {
+  name: 'TreeNode',
+  props: {
+    data: { required: true },
+    path: { type: String, required: true },
+    selectedPaths: { type: Array, required: true },
+    collapsedPaths: { type: Array, required: true },
+    keyName: { type: String, default: null },
+    arrayIndex: { type: Number, default: null },
+  },
+  emits: ['select', 'toggle'],
+  setup(props, { emit }) {
+    const isObject = Vue.computed(() => props.data !== null && typeof props.data === 'object' && !Array.isArray(props.data));
+    const isArray  = Vue.computed(() => Array.isArray(props.data));
+    const isPrimitive = Vue.computed(() => !isObject.value && !isArray.value);
+    const isCollapsed = Vue.computed(() => props.collapsedPaths.includes(props.path));
+    const isSelected  = Vue.computed(() => {
+      const norm = props.path.replace(/\[\d+\]/g, '[*]');
+      return props.selectedPaths.includes(norm);
+    });
+    const childCount  = Vue.computed(() => {
+      if (isObject.value) return Object.keys(props.data).length;
+      if (isArray.value)  return props.data.length;
+      return 0;
+    });
+    const valueType = Vue.computed(() => {
+      if (props.data === null)            return 'null';
+      if (typeof props.data === 'string') return 'string';
+      if (typeof props.data === 'number') return 'number';
+      if (typeof props.data === 'boolean')return 'boolean';
+      return null;
+    });
+    const displayValue = Vue.computed(() => {
+      if (props.data === null) return 'null';
+      if (typeof props.data === 'string') return JSON.stringify(props.data);
+      return String(props.data);
+    });
+
+    // ── Render limit (virtual pagination inside this node) ──
+    const visibleCount = Vue.ref(RENDER_LIMIT_STEP);
+    const visibleItems = Vue.computed(() => {
+      if (isArray.value)  return props.data.slice(0, visibleCount.value);
+      if (isObject.value) return Object.entries(props.data).slice(0, visibleCount.value);
+      return [];
+    });
+    const hiddenCount = Vue.computed(() => Math.max(0, childCount.value - visibleCount.value));
+    function showMore() { visibleCount.value += RENDER_LIMIT_STEP; }
+
+    function onClick(e) {
+      emit('select', { path: props.path, shift: e.shiftKey || e.ctrlKey || e.metaKey });
+    }
+    function onToggle(e) {
+      e.stopPropagation();
+      emit('toggle', props.path);
+    }
+    function childPath(key) {
+      if (isArray.value) return props.path + '[' + key + ']';
+      if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(String(key))) return props.path + '.' + key;
+      return props.path + '["' + String(key).replace(/"/g, '\\"') + '"]';
+    }
+
+    return { isObject, isArray, isPrimitive, isCollapsed, isSelected, childCount,
+             valueType, displayValue, visibleItems, hiddenCount, showMore,
+             onClick, onToggle, childPath };
+  },
+  components: {}, // self-referential added below
+  template: `
+    <div class="tree-node">
+      <span class="tree-row" :class="{ selected: isSelected }" @click="onClick">
+        <span v-if="!isPrimitive" class="toggle-btn" @click="onToggle">{{ isCollapsed ? '▶' : '▼' }}</span>
+        <span v-else class="no-toggle"></span>
+
+        <span v-if="keyName !== null" class="jkey">"{{ keyName }}"</span>
+        <span v-if="arrayIndex !== null" class="array-idx">{{ arrayIndex }}</span>
+        <span v-if="keyName !== null || arrayIndex !== null" class="colon">:</span>
+
+        <template v-if="isPrimitive">
+          <span :class="'j' + valueType">{{ displayValue }}</span>
+        </template>
+        <template v-else-if="isObject">
+          <span class="jbrace">{{'{'}}</span>
+          <span v-if="isCollapsed" class="collapsed-hint">{{ childCount }} keys…</span>
+          <span v-else class="jbrace" style="opacity:0.35">…</span>
+        </template>
+        <template v-else>
+          <span class="jbrace">[</span>
+          <span v-if="isCollapsed" class="collapsed-hint">{{ childCount }} items…</span>
+          <span v-else class="jbrace" style="opacity:0.35">…</span>
+        </template>
+      </span>
+
+      <!-- Expanded children -->
+      <template v-if="!isPrimitive && !isCollapsed">
+        <div class="tree-indent">
+          <template v-if="isObject">
+            <tree-node
+              v-for="[key, val] in visibleItems"
+              :key="key"
+              :data="val"
+              :path="childPath(key)"
+              :key-name="String(key)"
+              :selected-paths="selectedPaths"
+              :collapsed-paths="collapsedPaths"
+              @select="$emit('select', $event)"
+              @toggle="$emit('toggle', $event)"
+            ></tree-node>
+          </template>
+          <template v-else>
+            <tree-node
+              v-for="(val, idx) in visibleItems"
+              :key="idx"
+              :data="val"
+              :path="childPath(idx)"
+              :array-index="idx"
+              :selected-paths="selectedPaths"
+              :collapsed-paths="collapsedPaths"
+              @select="$emit('select', $event)"
+              @toggle="$emit('toggle', $event)"
+            ></tree-node>
+          </template>
+          <button v-if="hiddenCount > 0" class="show-more-btn" @click.stop="showMore">
+            ▼ show {{ Math.min(hiddenCount, 100) }} more
+            <span style="color:var(--muted)">({{ hiddenCount }} remaining)</span>
+          </button>
+        </div>
+        <span class="jbrace" style="margin-left:3px">{{ isObject ? '}' : ']' }}</span>
+      </template>
+      <template v-else-if="!isPrimitive && isCollapsed">
+        <span class="jbrace" style="margin-left:3px">{{ isObject ? '}' : ']' }}</span>
+      </template>
+    </div>
+  `
+};
+TreeNode.components = { TreeNode };
+
+// ── Auto-collapse helper ──────────────────────────────────────────────────────
+// Walk the parsed tree and collect paths that should start collapsed:
+// any node with > AUTO_COLLAPSE_SIZE children, or at depth >= AUTO_COLLAPSE_DEPTH.
+function computeAutoCollapse(data, path, depth, result) {
+  const isArr = Array.isArray(data);
+  const isObj = data !== null && typeof data === 'object' && !isArr;
+  if (!isArr && !isObj) return;
+  const size = isArr ? data.length : Object.keys(data).length;
+  if (depth >= AUTO_COLLAPSE_DEPTH || size > AUTO_COLLAPSE_SIZE) {
+    result.push(path);
+    return; // don't recurse into collapsed nodes — saves time on huge data
+  }
+  if (isArr) {
+    data.slice(0, 50).forEach((v, i) =>
+      computeAutoCollapse(v, path + '[' + i + ']', depth + 1, result));
+  } else {
+    Object.entries(data).slice(0, 50).forEach(([k, v]) => {
+      const cp = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(k)
+        ? path + '.' + k
+        : path + '["' + k.replace(/"/g, '\\"') + '"]';
+      computeAutoCollapse(v, cp, depth + 1, result);
+    });
+  }
+}
+
+// ── Path utilities ────────────────────────────────────────────────────────────
+
+// Replace all numeric array indices with [*] wildcard
+function normalizePath(path) {
+  return path.replace(/\[\d+\]/g, '[*]');
+}
+
+// Build a jq filter from wildcard paths.
+// Groups paths by their first [*] array prefix so multiple columns from the
+// same array level produce {col1: .col1, col2: .col2} objects per row.
+function buildWildcardFilter(paths) {
+  function splitFirst(p) {
+    const idx = p.indexOf('[*]');
+    if (idx === -1) return { prefix: null, rest: p };
+    return { prefix: p.slice(0, idx), rest: p.slice(idx + 3) };
+  }
+  const splits = paths.map(splitFirst);
+  const firstPrefix = splits[0].prefix;
+  const allSamePrefix = splits.every(s => s.prefix === firstPrefix);
+
+  if (!allSamePrefix || firstPrefix === null) {
+    // Mixed or no wildcard — build per-path jq
+    const filters = paths.map(p => {
+      const parts = p.split('[*]');
+      if (parts.length === 1) return p || '.';
+      const inner = parts.slice(0, -1).map(s => (s || '.') + '[]').join(' | ')
+        + (parts[parts.length - 1] ? ' | ' + parts[parts.length - 1] : '');
+      return '[' + inner + ']';
+    });
+    return filters.length === 1 ? filters[0] : filters.join('\n');
+  }
+
+  const arrExpr = (firstPrefix === '' ? '.' : firstPrefix) + '[]';
+
+  if (paths.length === 1) {
+    const rest = splits[0].rest;
+    if (!rest) return '[' + arrExpr + ']';
+    return '[' + arrExpr + ' | ' + rest.replace(/\[\*\]/g, '[]') + ']';
+  }
+
+  // Multi-column: produce array of objects [{col1: v, col2: v}, ...]
+  const fieldDefs = splits.map(({ rest }, i) => {
+    const restJq = rest ? rest.replace(/\[\*\]/g, '[]') : '.';
+    const key = (rest || '').replace(/^\./, '').replace(/[\[.].*/g, '') || ('col' + i);
+    return JSON.stringify(key) + ': (' + restJq + ')';
+  });
+  return '[' + arrExpr + ' | {' + fieldDefs.join(', ') + '}]';
+}
+
+// JS fallback: evaluate wildcard paths directly against parsed data
+function evalWildcardPaths(paths, data) {
+  function splitFirst(p) {
+    const idx = p.indexOf('[*]');
+    if (idx === -1) return { prefix: null, rest: p };
+    return { prefix: p.slice(0, idx), rest: p.slice(idx + 3) };
+  }
+  const splits = paths.map(splitFirst);
+  const fp = splits[0].prefix;
+  const allSame = splits.every(s => s.prefix === fp);
+
+  const getArr = prefix =>
+    prefix === '' ? data : evalSimpleJqPath(prefix, data);
+
+  if (!allSame || fp === null) {
+    if (paths.length === 1) {
+      const { prefix, rest } = splits[0];
+      if (prefix === null) return evalSimpleJqPath(paths[0] || '.', data);
+      const arr = getArr(prefix);
+      if (!Array.isArray(arr)) return null;
+      return rest ? arr.map(r => evalSimpleJqPath(rest, r)) : arr;
+    }
+    return paths.map(p => {
+      const { prefix, rest } = splitFirst(p);
+      if (prefix === null) return evalSimpleJqPath(p || '.', data);
+      const arr = getArr(prefix);
+      return rest && Array.isArray(arr) ? arr.map(r => evalSimpleJqPath(rest, r)) : arr;
+    });
+  }
+
+  const arr = getArr(fp);
+  if (!Array.isArray(arr)) return arr ?? null;
+
+  if (paths.length === 1) {
+    const rest = splits[0].rest;
+    if (!rest) return arr;
+    return arr.map(item => item != null ? evalSimpleJqPath(rest, item) : null);
+  }
+
+  return arr.map(row => {
+    if (row == null) return null;
+    const obj = {};
+    splits.forEach(({ rest }, i) => {
+      const key = (rest || '').replace(/^\./, '').replace(/[\[.].*/g, '') || ('col' + i);
+      obj[key] = rest ? evalSimpleJqPath(rest, row) : row;
+    });
+    return obj;
+  });
+}
+
+// Shared download helper
+function downloadJson(data, filename) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ── App ──────────────────────────────────────────────────────────────────────
+const { createApp, ref, computed, reactive } = Vue;
+
+const app = createApp({
+  components: { TreeNode },
+  setup() {
+    const rawInput    = ref('');
+    const parsedData  = ref(null);
+    const parseError  = ref('');
+    const isDragging  = ref(false);
+    const fileInput   = ref(null);
+    const selectedPaths  = ref([]);
+    const collapsedPaths = ref([]);
+    const running = ref(false);
+    const toast   = Vue.reactive({ visible: false, msg: '', type: 'success' });
+    let toastTimer = null;
+
+    function showToast(msg, type = 'success', duration = 3000) {
+      clearTimeout(toastTimer);
+      toast.msg     = msg;
+      toast.type    = type;
+      toast.visible = true;
+      toastTimer = setTimeout(() => { toast.visible = false; }, duration);
+    }
+
+    // jqFilter shown in the preview
+    const jqFilter = computed(() => {
+      if (!selectedPaths.value.length) return '';
+      return buildWildcardFilter(selectedPaths.value);
+    });
+
+    // Live output preview — sync JS eval, capped at 3 rows
+    const PREVIEW_ROWS = 3;
+    const previewSample = computed(() => {
+      if (!selectedPaths.value.length || parsedData.value === null) return null;
+      try {
+        const full = evalWildcardPaths(selectedPaths.value, parsedData.value);
+        if (Array.isArray(full)) {
+          const sample = full.slice(0, PREVIEW_ROWS);
+          return {
+            json: JSON.stringify(sample, null, 2),
+            totalRows: full.length,
+            truncated: full.length > PREVIEW_ROWS,
+            error: null,
+          };
+        }
+        return { json: JSON.stringify(full, null, 2), totalRows: 1, truncated: false, error: null };
+      } catch (e) {
+        return { error: e.message, json: null, totalRows: 0, truncated: false };
+      }
+    });
+
+    function parseJSON() {
+      parseError.value = '';
+      try {
+        parsedData.value = JSON.parse(rawInput.value.trim());
+        selectedPaths.value  = [];
+        collapsedPaths.value = []; // start fully expanded
+      } catch (e) {
+        parseError.value = e.message;
+        parsedData.value = null;
+      }
+    }
+
+    function loadText(text) { rawInput.value = text; parseJSON(); }
+
+    function triggerFileInput() { fileInput.value && fileInput.value.click(); }
+
+    function onFileChange(e) {
+      const file = e.target.files[0];
+      if (file) readFile(file);
+      e.target.value = '';
+    }
+
+    function onDrop(e) {
+      isDragging.value = false;
+      const file = e.dataTransfer.files[0];
+      if (file) readFile(file);
+    }
+
+    function readFile(file) {
+      const reader = new FileReader();
+      reader.onload = ev => loadText(ev.target.result);
+      reader.readAsText(file);
+    }
+
+    function onNodeSelect({ path, shift }) {
+      const npath = normalizePath(path);
+      if (!shift) {
+        if (selectedPaths.value.length === 1 && selectedPaths.value[0] === npath) {
+          selectedPaths.value = [];
+        } else {
+          selectedPaths.value = [npath];
+        }
+      } else {
+        const idx = selectedPaths.value.indexOf(npath);
+        if (idx >= 0) selectedPaths.value = selectedPaths.value.filter((_, i) => i !== idx);
+        else selectedPaths.value = [...selectedPaths.value, npath];
+      }
+    }
+
+    function onToggle(path) {
+      const idx = collapsedPaths.value.indexOf(path);
+      if (idx >= 0) collapsedPaths.value = collapsedPaths.value.filter((_, i) => i !== idx);
+      else collapsedPaths.value = [...collapsedPaths.value, path];
+    }
+
+    function removePath(i)  { selectedPaths.value = selectedPaths.value.filter((_, idx) => idx !== i); }
+    function clearSelections() { selectedPaths.value = []; }
+
+    async function runExtraction() {
+      if (!selectedPaths.value.length || parsedData.value === null) return;
+      running.value = true;
+      const filter = buildWildcardFilter(selectedPaths.value);
+      let result;
+      try {
+        let jqFn = null;
+        try {
+          const jqApi = await loadJq();
+          if (typeof jqApi === 'function') {
+            jqFn = async (f, d) => { const r = await jqApi(d, f); return JSON.stringify(r, null, 2); };
+          } else if (jqApi && typeof jqApi.json === 'function') {
+            jqFn = async (f, d) => { const r = await jqApi.json(d, f); return JSON.stringify(r, null, 2); };
+          }
+        } catch (e) { console.warn('jq-web unavailable, using fallback:', e.message); }
+
+        if (jqFn) {
+          result = await jqFn(filter, parsedData.value);
+        } else {
+          result = JSON.stringify(evalWildcardPaths(selectedPaths.value, parsedData.value), null, 2);
+        }
+      } catch (e) {
+        running.value = false;
+        showToast('jq error: ' + e.message, 'error', 5000);
+        return;
+      }
+      running.value = false;
+      let parsed;
+      try { parsed = JSON.parse(result); } catch { parsed = result; }
+      downloadJson(parsed, 'jq-output.json');
+      const rowCount = Array.isArray(parsed) ? parsed.length : 1;
+      showToast('✓ Downloaded ' + rowCount + ' row' + (rowCount !== 1 ? 's' : '') + ' — jq-output.json');
+    }
+
+    const levelKeys = computed(() => {
+      if (!selectedPaths.value.length || parsedData.value === null) return null;
+      const samplePath = selectedPaths.value[0];
+      const starIdx = samplePath.indexOf('[*]');
+      let arr;
+      if (starIdx === -1) {
+        const val = evalSimpleJqPath(samplePath || '.', parsedData.value);
+        if (Array.isArray(val)) {
+          arr = val;
+        } else if (val && typeof val === 'object') {
+          const keys = Object.keys(val);
+          return keys.length ? keys : null;
+        } else {
+          return null;
+        }
+      } else {
+        const arrayPart = samplePath.slice(0, starIdx);
+        arr = arrayPart ? evalSimpleJqPath(arrayPart, parsedData.value) : parsedData.value;
+      }
+      if (!Array.isArray(arr)) return null;
+      const keySet = new Set();
+      arr.slice(0, 1000).forEach(item => {
+        if (item && typeof item === 'object' && !Array.isArray(item))
+          Object.keys(item).forEach(k => keySet.add(k));
+      });
+      const keys = Array.from(keySet);
+      return keys.length ? keys : null;
+    });
+
+    const levelKeysDisplay = computed(() =>
+      levelKeys.value ? JSON.stringify(levelKeys.value, null, 2) : ''
+    );
+
+    async function copyLevelKeys() {
+      if (!levelKeys.value) return;
+      try {
+        await navigator.clipboard.writeText(levelKeysDisplay.value);
+        showToast('✓ Keys copied to clipboard');
+      } catch {
+        showToast('Copy failed', 'error');
+      }
+    }
+
+    return {
+      rawInput, parsedData, parseError, isDragging, fileInput,
+      selectedPaths, collapsedPaths, jqFilter, previewSample, running, toast,
+      levelKeys, levelKeysDisplay, copyLevelKeys,
+      parseJSON, triggerFileInput, onFileChange, onDrop,
+      onNodeSelect, onToggle, removePath, clearSelections,
+      runExtraction,
+    };
+  }
+});
+
+app.mount('#app');
+</script>
+</body>
+</html>
