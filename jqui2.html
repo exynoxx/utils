@@ -1,0 +1,1356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>jq UI</title>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --surface3: #2a2f47;
+      --border: #2e3352;
+      --accent: #7c6af7;
+      --accent2: #a78bfa;
+      --accent-glow: rgba(124,106,247,0.25);
+      --green: #34d399;
+      --green-dim: rgba(52,211,153,0.15);
+      --yellow: #fbbf24;
+      --yellow-dim: rgba(251,191,36,0.15);
+      --red: #f87171;
+      --red-dim: rgba(248,113,113,0.15);
+      --text: #e2e8f0;
+      --muted: #6b7280;
+      --hover-bg: rgba(124,106,247,0.10);
+      --string: #86efac;
+      --number: #93c5fd;
+      --bool: #fda4af;
+      --null: #94a3b8;
+      --key: #c4b5fd;
+      --radius: 12px;
+      --radius-sm: 6px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 18px 32px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .logo { font-size: 1.5rem; font-weight: 800; letter-spacing: -0.5px; color: var(--accent2); }
+    .logo span { color: var(--text); }
+    .subtitle { color: var(--muted); font-size: 0.82rem; }
+    .main { display: flex; flex: 1; overflow: hidden; height: calc(100vh - 61px); }
+    .left-panel {
+      width: 420px; min-width: 320px; flex-shrink: 0;
+      display: flex; flex-direction: column;
+      border-right: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .panel-header {
+      padding: 16px 20px 12px;
+      font-size: 0.75rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--muted); border-bottom: 1px solid var(--border);
+    }
+    .drop-zone {
+      margin: 16px;
+      border: 2px dashed var(--border); border-radius: var(--radius);
+      padding: 28px 20px;
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      transition: border-color 0.2s, background 0.2s;
+      cursor: pointer; position: relative;
+    }
+    .drop-zone.dragging { border-color: var(--accent); background: var(--accent-glow); }
+    .drop-zone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+    .drop-icon { font-size: 2rem; line-height: 1; }
+    .drop-label { font-size: 0.85rem; color: var(--muted); text-align: center; }
+    .drop-label strong { color: var(--accent2); cursor: pointer; }
+    .or-divider {
+      display: flex; align-items: center; gap: 10px;
+      margin: 0 16px; color: var(--muted); font-size: 0.78rem;
+    }
+    .or-divider::before, .or-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+    .json-textarea {
+      flex: 1; margin: 12px 16px 16px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 14px;
+      color: var(--text); font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.78rem; line-height: 1.6; resize: none; outline: none;
+      transition: border-color 0.2s; min-height: 160px;
+    }
+    .json-textarea:focus { border-color: var(--accent); }
+    .json-textarea::placeholder { color: var(--muted); }
+    .parse-btn {
+      margin: 0 16px 16px; padding: 11px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border: none; border-radius: var(--radius-sm);
+      color: #fff; font-weight: 700; font-size: 0.88rem;
+      cursor: pointer; letter-spacing: 0.03em;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .parse-btn:hover { opacity: 0.9; }
+    .parse-btn:active { transform: scale(0.98); }
+    .error-box {
+      margin: 0 16px 12px;
+      background: rgba(248,113,113,0.12); border: 1px solid rgba(248,113,113,0.35);
+      border-radius: var(--radius-sm); padding: 10px 14px;
+      font-size: 0.78rem; color: var(--red); font-family: monospace;
+    }
+    .mid-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+    .mid-header {
+      padding: 14px 20px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      background: var(--surface); gap: 12px; flex-wrap: wrap;
+    }
+    .mid-header-left { display: flex; align-items: center; gap: 12px; }
+    .mid-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    .mid-status-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 3px 10px; border-radius: 99px;
+      font-size: 0.7rem; font-weight: 600; border: 1px solid;
+    }
+    .mid-status-badge.raw { background: rgba(107,114,128,0.15); border-color: rgba(107,114,128,0.4); color: var(--muted); }
+    .mid-status-badge.active { background: rgba(124,106,247,0.15); border-color: rgba(124,106,247,0.5); color: var(--accent2); }
+    .mid-view-toggle { display: flex; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+    .mid-view-toggle button {
+      background: var(--surface3); border: none; padding: 4px 10px;
+      font-size: 0.7rem; color: var(--muted); cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+    }
+    .mid-view-toggle button.active { background: var(--accent); color: #fff; }
+    .tree-scroll { flex: 1; overflow: auto; padding: 14px 8px 14px 14px; }
+    .tree-node { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.8rem; line-height: 1.8; user-select: none; }
+    .tree-row {
+      display: inline-flex; align-items: baseline;
+      border-radius: 4px; padding: 0 3px; cursor: default;
+      transition: background 0.12s; white-space: nowrap;
+    }
+    .tree-row:hover { background: var(--hover-bg); }
+    .tree-indent { display: inline-block; padding-left: 22px; }
+    .toggle-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 16px; height: 16px; margin-right: 4px;
+      border-radius: 3px; color: var(--muted); font-size: 0.65rem;
+      flex-shrink: 0; background: var(--surface3); cursor: pointer;
+      transition: background 0.12s;
+    }
+    .toggle-btn:hover { background: var(--accent); color: #fff; }
+    .no-toggle { display: inline-block; width: 20px; }
+    .jkey { color: var(--key); }
+    .colon { color: var(--muted); margin: 0 3px; }
+    .jstring { color: var(--string); }
+    .jnumber { color: var(--number); }
+    .jbool { color: var(--bool); }
+    .jnull { color: var(--null); }
+    .jbrace { color: var(--muted); }
+    .collapsed-hint { color: var(--muted); font-style: italic; font-size: 0.72rem; margin-left: 4px; }
+    .array-idx { color: var(--muted); font-size: 0.7rem; margin-right: 4px; }
+    .right-panel {
+      width: 380px; min-width: 300px; flex-shrink: 0;
+      display: flex; flex-direction: column;
+      border-left: 1px solid var(--border); background: var(--surface);
+    }
+    .pipeline-area { flex: 1; overflow: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+    .array-path-section {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 10px 12px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .array-path-label { font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    .array-path-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .array-path-chip {
+      background: rgba(124,106,247,0.12); border: 1px solid rgba(124,106,247,0.35);
+      border-radius: var(--radius-sm); padding: 3px 10px;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.72rem; color: var(--accent2); cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .array-path-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .array-path-chip:not(.active):hover { border-color: var(--accent2); background: rgba(124,106,247,0.22); }
+    .array-path-input {
+      flex: 1; background: var(--surface3); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 5px 10px;
+      color: var(--text); font-family: 'JetBrains Mono','Fira Code',monospace;
+      font-size: 0.75rem; outline: none; transition: border-color 0.15s; width: 100%;
+    }
+    .array-path-input:focus { border-color: var(--accent); }
+    .array-path-input::placeholder { color: var(--muted); }
+    .pipeline-empty {
+      display: flex; flex-direction: column; align-items: center;
+      padding: 20px 10px; gap: 8px; color: var(--muted);
+      border: 1px dashed var(--border); border-radius: var(--radius-sm);
+    }
+    .pipeline-empty-icon { font-size: 1.6rem; }
+    .pipeline-empty-text { font-size: 0.8rem; text-align: center; line-height: 1.5; }
+    .pipeline-step-card { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--surface2); cursor: default; }
+    .pipeline-step-card.dragging-source { opacity: 0.35; }
+    .drop-gap {
+      height: 34px; border-radius: var(--radius-sm);
+      border: 2px dashed var(--accent); background: var(--accent-glow);
+      flex-shrink: 0; pointer-events: none;
+    }
+    .drag-handle {
+      display: inline-flex; align-items: center; justify-content: center;
+      color: var(--muted); font-size: 0.8rem; cursor: grab; padding: 0 4px 0 0;
+      flex-shrink: 0; user-select: none;
+    }
+    .drag-handle:active { cursor: grabbing; }
+    .pipeline-step-card-header {
+      display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+      cursor: pointer; transition: background 0.12s; user-select: none;
+    }
+    .pipeline-step-card-header:hover { background: var(--hover-bg); }
+    .pipeline-step-card.expanded .pipeline-step-card-header { border-bottom: 1px solid var(--border); }
+    .step-type-badge {
+      font-size: 0.62rem; font-weight: 700; letter-spacing: 0.06em;
+      text-transform: uppercase; padding: 2px 7px; border-radius: 99px; flex-shrink: 0;
+    }
+    .step-type-badge.filter { background: var(--yellow-dim); color: var(--yellow); border: 1px solid rgba(251,191,36,0.4); }
+    .step-type-badge.select { background: var(--green-dim); color: var(--green); border: 1px solid rgba(52,211,153,0.4); }
+    .step-type-badge.map { background: rgba(124,106,247,0.15); color: var(--accent2); border: 1px solid rgba(124,106,247,0.4); }
+    .step-summary {
+      flex: 1; font-size: 0.75rem; color: var(--text);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    }
+    .step-summary.empty { color: var(--muted); font-style: italic; font-family: sans-serif; font-size: 0.72rem; }
+    .step-expand-icon { color: var(--muted); font-size: 0.65rem; flex-shrink: 0; }
+    .step-remove-btn {
+      background: none; border: none; color: var(--muted);
+      cursor: pointer; font-size: 0.95rem; padding: 0 2px;
+      transition: color 0.15s; flex-shrink: 0;
+    }
+    .step-remove-btn:hover { color: var(--red); }
+    .step-edit-area { padding: 12px 12px 10px; display: flex; flex-direction: column; gap: 10px; }
+    .step-field-label { font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 4px; }
+    .step-input {
+      width: 100%; background: var(--surface3); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 6px 10px;
+      color: var(--text); font-family: 'JetBrains Mono','Fira Code',monospace;
+      font-size: 0.75rem; outline: none; transition: border-color 0.15s;
+    }
+    .step-input:focus { border-color: var(--accent); }
+    .step-input::placeholder { color: var(--muted); }
+    .step-hint {
+      font-size: 0.7rem; color: var(--muted); line-height: 1.5;
+      font-family: 'JetBrains Mono','Fira Code',monospace;
+      background: var(--surface3); border-radius: var(--radius-sm); padding: 4px 8px;
+    }
+    .step-jq-preview {
+      font-family: 'JetBrains Mono','Fira Code',monospace;
+      font-size: 0.7rem; color: var(--accent2);
+      background: var(--surface3); border-radius: var(--radius-sm);
+      padding: 4px 8px; word-break: break-all; opacity: 0.8;
+    }
+    .rules-list { display: flex; flex-direction: column; gap: 8px; }
+    .rule-card {
+      background: var(--surface3); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 10px 11px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .rule-card-header { display: flex; align-items: center; gap: 8px; }
+    .rule-type-select {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 4px 8px;
+      color: var(--accent2); font-size: 0.75rem; font-weight: 600;
+      cursor: pointer; outline: none; transition: border-color 0.15s;
+    }
+    .rule-type-select:focus { border-color: var(--accent); }
+    .rule-remove-btn { margin-left: auto; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1rem; transition: color 0.15s; }
+    .rule-remove-btn:hover { color: var(--red); }
+    .rule-fields { display: grid; gap: 7px; }
+    .rule-field-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .rule-field-label { font-size: 0.68rem; color: var(--muted); white-space: nowrap; min-width: 60px; }
+    .rule-input {
+      flex: 1; min-width: 100px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 4px 9px;
+      color: var(--text); font-family: 'JetBrains Mono','Fira Code',monospace;
+      font-size: 0.74rem; outline: none; transition: border-color 0.15s;
+    }
+    .rule-input:focus { border-color: var(--accent); }
+    .rule-input::placeholder { color: var(--muted); }
+    .rule-value-type-toggle { display: flex; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; flex-shrink: 0; }
+    .rule-value-type-toggle button { background: var(--surface2); border: none; padding: 3px 8px; font-size: 0.68rem; color: var(--muted); cursor: pointer; transition: background 0.12s, color 0.12s; }
+    .rule-value-type-toggle button.active { background: var(--accent); color: #fff; }
+    .rule-cond-hint { font-size: 0.68rem; color: var(--muted); line-height: 1.5; font-family: 'JetBrains Mono','Fira Code',monospace; background: var(--surface2); border-radius: var(--radius-sm); padding: 4px 8px; }
+    .add-rule-btn {
+      align-self: flex-start; padding: 5px 12px;
+      background: var(--surface2); border: 1px dashed var(--border);
+      border-radius: var(--radius-sm); color: var(--accent2); font-size: 0.76rem;
+      cursor: pointer; transition: border-color 0.15s, background 0.15s;
+    }
+    .add-rule-btn:hover { border-color: var(--accent); background: var(--accent-glow); }
+    .right-footer { padding: 12px 14px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: stretch; }
+    .add-step-wrap { position: relative; flex: 1; }
+    .add-step-btn {
+      width: 100%; padding: 10px 12px;
+      background: var(--surface2); border: 1px dashed var(--accent);
+      border-radius: var(--radius-sm); color: var(--accent2); font-size: 0.82rem; font-weight: 600;
+      cursor: pointer; transition: background 0.15s, border-color 0.15s;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .add-step-btn:hover { background: var(--accent-glow); }
+    .add-step-dropdown {
+      margin-top: 4px; width: 100%;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); overflow: hidden;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.45); z-index: 50;
+    }
+    .add-step-option { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; font-size: 0.82rem; transition: background 0.12s; }
+    .add-step-option:hover { background: var(--hover-bg); }
+    .download-btn {
+      padding: 10px 14px; flex: 1;
+      background: linear-gradient(135deg, var(--green), #059669);
+      border: none; border-radius: var(--radius-sm);
+      color: #fff; font-weight: 700; font-size: 0.82rem; cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+      display: flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap;
+    }
+    .download-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .download-btn:not(:disabled):hover { opacity: 0.9; }
+    .download-btn:not(:disabled):active { transform: scale(0.98); }
+    .toast {
+      position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+      padding: 11px 22px; border-radius: var(--radius-sm);
+      font-size: 0.85rem; font-weight: 600; box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+      z-index: 200; pointer-events: none; transition: opacity 0.3s;
+    }
+    .toast.success { background: #064e3b; border: 1px solid var(--green); color: var(--green); }
+    .toast.error   { background: #450a0a; border: 1px solid var(--red);   color: var(--red); }
+    .toast-enter-active, .toast-leave-active { transition: opacity 0.3s; }
+    .toast-enter-from, .toast-leave-to { opacity: 0; }
+    .show-more-btn {
+      display: inline-flex; align-items: center; gap: 6px; margin: 2px 0 2px 2px;
+      padding: 2px 10px; background: var(--surface3); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); color: var(--muted);
+      font-family: 'JetBrains Mono','Fira Code',monospace; font-size: 0.72rem; cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .show-more-btn:hover { border-color: var(--accent); color: var(--accent2); }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--border); }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 6px; }
+    .jq-command-box {
+      padding: 10px 14px 0;
+    }
+    .jq-command-label { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 5px; }
+    .jq-command-field {
+      width: 100%; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 7px 10px;
+      color: var(--accent2); font-family: 'JetBrains Mono','Fira Code',monospace;
+      font-size: 0.72rem; word-break: break-all; white-space: pre-wrap;
+      line-height: 1.5; min-height: 36px; user-select: text;
+    }
+    .jq-command-field.empty { color: var(--muted); font-style: italic; font-family: sans-serif; font-size: 0.72rem; }
+    .eval-indicator {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--surface3); border: 1px solid var(--border);
+      transition: background 0.12s, box-shadow 0.12s;
+      flex-shrink: 0;
+    }
+    .eval-indicator.flash { background: var(--green); box-shadow: 0 0 7px var(--green); border-color: var(--green); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 14px; color: var(--muted); padding: 40px 20px; text-align: center; }
+    .empty-icon { font-size: 3rem; }
+    .empty-label { font-size: 0.88rem; line-height: 1.6; }
+    .load-progress-wrap { margin: 8px 16px 4px; display: flex; flex-direction: column; gap: 5px; }
+    .load-progress-bar { height: 5px; background: var(--surface3); border-radius: 99px; overflow: hidden; }
+    .load-progress-fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width 0.12s ease; }
+    .load-progress-label { font-size: 0.73rem; color: var(--muted); text-align: center; display: flex; align-items: center; justify-content: center; gap: 6px; }
+    .file-truncated-notice { margin: 0 16px 4px; font-size: 0.71rem; color: var(--muted); background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 10px; line-height: 1.45; }
+    .file-truncated-notice strong { color: var(--accent2); }
+    .badge { display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: #fff; font-size: 0.65rem; font-weight: 700; border-radius: 99px; padding: 1px 7px; min-width: 18px; height: 18px; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo">jq<span>UI</span></div>
+    <div class="subtitle">Transform Pipeline — build ordered filter / select / map steps with live tree preview</div>
+  </header>
+
+  <div class="main">
+    <!-- LEFT: JSON Input -->
+    <div class="left-panel">
+      <div class="panel-header">JSON Input</div>
+      <div
+        class="drop-zone"
+        :class="{ dragging: isDragging }"
+        @dragover.prevent="isDragging = true"
+        @dragleave.prevent="isDragging = false"
+        @drop.prevent="onDrop"
+        @click="triggerFileInput"
+      >
+        <input ref="fileInput" type="file" accept=".json,application/json" @change="onFileChange" style="display:none" />
+        <div class="drop-icon">📂</div>
+        <div class="drop-label">
+          <strong>Click to browse</strong> or drag &amp; drop<br />
+          a <code style="color:var(--accent2)">.json</code> file here
+        </div>
+      </div>
+
+      <div v-if="loadProgress !== null" class="load-progress-wrap">
+        <div class="load-progress-bar">
+          <div class="load-progress-fill" :style="{ width: loadProgress + '%' }"></div>
+        </div>
+        <div class="load-progress-label">
+          <span class="spinner"></span>Loading&hellip; {{ loadProgress }}%
+        </div>
+      </div>
+
+      <div class="or-divider">or paste JSON below</div>
+
+      <div v-if="fileMeta && fileMeta.truncated" class="file-truncated-notice">
+        📄 <strong>{{ fileMeta.name }}</strong> ({{ fileMeta.sizeMB }}&nbsp;MB) &mdash;
+        showing first {{ displayChars.toLocaleString() }}&nbsp;chars in editor;
+        <strong>full file used for extraction</strong>
+      </div>
+
+      <textarea
+        class="json-textarea"
+        v-model="rawInput"
+        @input="onTextareaInput"
+        :disabled="loadProgress !== null"
+        placeholder='{ "example": [1, 2, 3], "nested": { "key": "value" } }'
+        spellcheck="false"
+      ></textarea>
+      <div v-if="parseError" class="error-box">⚠ {{ parseError }}</div>
+      <button class="parse-btn" @click="parseJSON" :disabled="loadProgress !== null">Parse JSON →</button>
+    </div>
+
+    <!-- MIDDLE: Tree Viewer -->
+    <div class="mid-panel">
+      <div class="mid-header">
+        <div class="mid-header-left">
+          <div class="mid-title">JSON Explorer</div>
+          <template v-if="parsedData !== null">
+            <span v-if="!pipelineSteps.length" class="mid-status-badge raw">Raw JSON</span>
+            <span v-else class="mid-status-badge active">⚡ Pipeline active — {{ pipelineSteps.length }} step{{ pipelineSteps.length !== 1 ? 's' : '' }}</span>
+          </template>
+          <span v-if="isLargeFile" title="Large file: preview capped at 50 rows. Press Enter to evaluate." style="font-size:0.65rem;font-weight:600;letter-spacing:0.05em;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.4);color:var(--yellow);padding:2px 7px;border-radius:99px;text-transform:uppercase;">⚡ Large — Enter to eval</span>
+        </div>
+        <div v-if="parsedData !== null && pipelineSteps.length > 0" class="mid-view-toggle">
+          <button :class="{ active: treeView === 'transformed' }" @click="treeView = 'transformed'">Transformed</button>
+          <button :class="{ active: treeView === 'original' }" @click="treeView = 'original'">Original</button>
+        </div>
+      </div>
+      <div class="tree-scroll" v-if="parsedData !== null">
+        <div class="tree-node">
+          <tree-node
+            :data="displayData"
+            :path="''"
+            :collapsed-paths="collapsedPaths"
+            @toggle="onToggle"
+          ></tree-node>
+        </div>
+      </div>
+      <div class="empty-state" v-else>
+        <div class="empty-icon">🔍</div>
+        <div class="empty-label">Paste or upload JSON on the left,<br />then build a pipeline on the right.</div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Transform Pipeline -->
+    <div class="right-panel">
+      <div class="panel-header" style="display:flex;align-items:center;gap:8px;">
+        <span class="eval-indicator" :class="{ flash: pipelineEvalFlash }" title="Evaluation indicator"></span>
+        Transform Pipeline
+        <span v-if="pipelineSteps.length" class="badge">{{ pipelineSteps.length }}</span>
+        <button
+          v-if="pipelineSteps.length"
+          @click="clearPipeline"
+          style="margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:0.75rem;text-decoration:underline;"
+        >clear</button>
+      </div>
+
+      <div class="pipeline-area">
+        <!-- Array path (shown when data is loaded) -->
+        <div v-if="parsedData !== null" class="array-path-section">
+          <div class="array-path-label">Array path</div>
+          <div v-if="pipelineArrayPathSuggestions.length" class="array-path-chips">
+            <button
+              v-for="sug in pipelineArrayPathSuggestions"
+              :key="sug"
+              class="array-path-chip"
+              :class="{ active: pipelineArrayPath === sug }"
+              @click="pipelineArrayPath = sug"
+            >{{ sug || '.' }}</button>
+          </div>
+          <input
+            v-model="pipelineArrayPath"
+            class="array-path-input"
+            placeholder=".items  or  ."
+            spellcheck="false"
+          />
+        </div>
+
+        <!-- Steps list -->
+        <template v-if="parsedData !== null">
+          <div v-if="!pipelineSteps.length" class="pipeline-empty">
+            <div class="pipeline-empty-icon">🔧</div>
+            <div class="pipeline-empty-text">No steps yet.<br/>Use "+ Add step" below to begin.</div>
+          </div>
+
+          <div
+            v-for="(step, si) in pipelineSteps"
+            :key="step.id"
+          >
+            <div class="drop-gap" v-if="dragSrcIndex !== null && dropInsertIndex === si"></div>
+            <div
+              class="pipeline-step-card"
+              :class="{ expanded: activeStepId === step.id, 'dragging-source': dragSrcIndex === si }"
+              draggable="true"
+              @dragstart="onDragStart(si, $event)"
+              @dragover.prevent="onDragOver(si, $event)"
+              @dragleave="onDragLeave"
+              @drop.prevent="executeDrop"
+              @dragend="onDragEnd"
+            >
+            <div class="pipeline-step-card-header" @click="toggleStep(step.id)">
+              <span class="drag-handle" @mousedown.stop title="Drag to reorder">⁙</span>
+              <span class="step-type-badge" :class="step.type">{{ step.type.toUpperCase() }}</span>
+              <span class="step-summary" :class="{ empty: !stepSummary(step) }">
+                {{ stepSummary(step) || 'click to configure…' }}
+              </span>
+              <span class="step-expand-icon">{{ activeStepId === step.id ? '▲' : '▼' }}</span>
+              <button class="step-remove-btn" @click.stop="removeStep(si)" title="Remove step">✕</button>
+            </div>
+
+            <div v-if="activeStepId === step.id" class="step-edit-area">
+
+              <!-- FILTER -->
+              <template v-if="step.type === 'filter'">
+                <div>
+                  <div class="step-field-label">Condition</div>
+                  <input
+                    class="step-input"
+                    v-model="step.condition"
+                    placeholder=".price > 1000  or  .status == &quot;active&quot;"
+                    spellcheck="false"
+                  />
+                </div>
+                <div class="step-hint">Use <code>.</code> to reference the current element.<br/>e.g. <code>.age > 18</code> &nbsp; <code>.name != ""</code></div>
+                <div v-if="stepJq(step)" class="step-jq-preview">{{ stepJq(step) }}</div>
+              </template>
+
+              <!-- SELECT -->
+              <template v-else-if="step.type === 'select'">
+                <div>
+                  <div class="step-field-label">Columns (comma-separated)</div>
+                  <input
+                    class="step-input"
+                    v-model="step.columnsRaw"
+                    placeholder="id, name, price"
+                    spellcheck="false"
+                  />
+                </div>
+                <div v-if="availableKeys.length" style="display:flex;flex-wrap:wrap;gap:5px;">
+                  <button
+                    v-for="k in availableKeys"
+                    :key="k"
+                    class="array-path-chip"
+                    :class="{ active: selectColumnActive(step, k) }"
+                    @click="toggleSelectColumn(step, k)"
+                    style="font-size:0.68rem;"
+                  >{{ k }}</button>
+                </div>
+                <div class="step-hint">Keep only the listed fields per row.</div>
+                <label v-if="parseColumns(step.columnsRaw).length === 1" style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.78rem;color:var(--muted);user-select:none;">
+                  <input type="checkbox" v-model="step.valuesOnly" style="accent-color:var(--accent);width:14px;height:14px;cursor:pointer;" />
+                  Return array of values
+                  <span style="font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.7rem;color:var(--muted);">(e.g. [1, 2, 3])</span>
+                </label>
+                <div v-if="stepJq(step)" class="step-jq-preview">{{ stepJq(step) }}</div>
+              </template>
+
+              <!-- MAP -->
+              <template v-else-if="step.type === 'map'">
+                <div class="rules-list">
+                  <div v-for="(rule, ri) in step.rules" :key="rule.id" class="rule-card">
+                    <div class="rule-card-header">
+                      <select class="rule-type-select" v-model="rule.type">
+                        <option value="add">Add / Update</option>
+                        <option value="conditional">Conditional</option>
+                        <option value="delete">Delete</option>
+                      </select>
+                      <button class="rule-remove-btn" @click="removeStepRule(step, ri)" title="Remove">✕</button>
+                    </div>
+
+                    <template v-if="rule.type === 'add'">
+                      <div class="rule-fields">
+                        <div class="rule-field-row">
+                          <span class="rule-field-label">Column</span>
+                          <input class="rule-input" v-model="rule.column" placeholder="new_or_existing_key" spellcheck="false" />
+                        </div>
+                        <div class="rule-field-row">
+                          <span class="rule-field-label">Value</span>
+                          <div class="rule-value-type-toggle">
+                            <button :class="{ active: rule.valueType === 'expr' }" @click="rule.valueType = 'expr'">Expr</button>
+                            <button :class="{ active: rule.valueType === 'const' }" @click="rule.valueType = 'const'">Const</button>
+                          </div>
+                          <input class="rule-input" v-model="rule.value" :placeholder="rule.valueType === 'expr' ? '.price * 1.2' : '&quot;hello&quot;  or  42'" spellcheck="false" />
+                        </div>
+                        <div class="rule-cond-hint" v-if="rule.valueType === 'expr'">e.g. <code>.price * 1.1</code> &nbsp; <code>.first + " " + .last</code></div>
+                      </div>
+                    </template>
+
+                    <template v-else-if="rule.type === 'conditional'">
+                      <div class="rule-fields">
+                        <div class="rule-field-row">
+                          <span class="rule-field-label">Column</span>
+                          <input class="rule-input" v-model="rule.column" placeholder="key_to_set" spellcheck="false" />
+                        </div>
+                        <div class="rule-field-row">
+                          <span class="rule-field-label">Condition</span>
+                          <input class="rule-input" v-model="rule.condition" placeholder=".status == &quot;active&quot;" spellcheck="false" />
+                        </div>
+                        <div class="rule-field-row">
+                          <span class="rule-field-label">If true</span>
+                          <div class="rule-value-type-toggle">
+                            <button :class="{ active: rule.valueType === 'expr' }" @click="rule.valueType = 'expr'">Expr</button>
+                            <button :class="{ active: rule.valueType === 'const' }" @click="rule.valueType = 'const'">Const</button>
+                          </div>
+                          <input class="rule-input" v-model="rule.value" :placeholder="rule.valueType === 'expr' ? '.price * 0.9' : '&quot;yes&quot;'" spellcheck="false" />
+                        </div>
+                        <div class="rule-field-row">
+                          <span class="rule-field-label">If false</span>
+                          <input class="rule-input" v-model="rule.elsValue" :placeholder="rule.valueType === 'expr' ? '.price' : '&quot;no&quot;'" spellcheck="false" />
+                        </div>
+                        <div class="rule-cond-hint"><code>if (condition) then true_val else false_val end</code></div>
+                      </div>
+                    </template>
+
+                    <template v-else-if="rule.type === 'delete'">
+                      <div class="rule-fields">
+                        <div class="rule-field-row">
+                          <span class="rule-field-label">Column</span>
+                          <input class="rule-input" v-model="rule.column" placeholder="key_to_remove" spellcheck="false" />
+                        </div>
+                        <div class="rule-cond-hint">Generates: <code>del(.key)</code></div>
+                      </div>
+                    </template>
+                  </div>
+
+                  <button class="add-rule-btn" @click="addStepRule(step)">+ Add rule</button>
+                </div>
+                <div v-if="stepJq(step)" class="step-jq-preview">{{ stepJq(step) }}</div>
+              </template>
+
+            </div>
+            </div>
+          </div>
+          <div class="drop-gap" v-if="dragSrcIndex !== null && dropInsertIndex === pipelineSteps.length"></div>
+        <!-- Add step button — below last card -->
+        <div class="add-step-wrap" v-if="parsedData !== null" style="flex:unset;">
+          <button class="add-step-btn" @click="addStepDropdownOpen = !addStepDropdownOpen">
+            + Add step ▾
+          </button>
+          <div v-if="addStepDropdownOpen" class="add-step-dropdown">
+            <div class="add-step-option" @click="addStep('filter')">
+              <span class="step-type-badge filter">FILTER</span>
+              <span style="font-size:0.8rem;">Filter rows by condition</span>
+            </div>
+            <div class="add-step-option" @click="addStep('select')">
+              <span class="step-type-badge select">SELECT</span>
+              <span style="font-size:0.8rem;">Keep specific columns</span>
+            </div>
+            <div class="add-step-option" @click="addStep('map')">
+              <span class="step-type-badge map">MAP</span>
+              <span style="font-size:0.8rem;">Add / update / delete columns</span>
+            </div>
+          </div>
+        </div>
+        </template>
+      </div>
+
+      <!-- Footer -->
+      <div v-if="parsedData !== null" class="jq-command-box">
+        <div class="jq-command-label">jq command</div>
+        <div class="jq-command-field" :class="{ empty: !pipelineJqFilter }">{{ pipelineJqFilter || 'jq \'.\' input.json' }}</div>
+      </div>
+      <div class="right-footer">
+        <button
+          class="download-btn"
+          :disabled="parsedData === null || pipelineRunning"
+          @click="applyPipeline"
+        >
+          <span v-if="pipelineRunning"><span class="spinner"></span>Running…</span>
+          <span v-else>▶ Download</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <transition name="toast">
+    <div v-if="toast.visible" class="toast" :class="toast.type">{{ toast.msg }}</div>
+  </transition>
+</div>
+
+<script>
+const RENDER_LIMIT_STEP   = 50;
+const LARGE_FILE_ROWS     = 5000;
+const PREVIEW_CAP         = 50;
+const AUTO_COLLAPSE_SIZE  = 30;
+const AUTO_COLLAPSE_DEPTH = 3;
+const DISPLAY_SIZE_LIMIT  = 200 * 1024;
+const DISPLAY_CHARS       = 8000;
+
+const JQ_CDN = 'https://cdn.jsdelivr.net/npm/jq-web@0.3.1/jq.asm.js';
+let jqPromise = null;
+
+function loadJq() {
+  if (jqPromise) return jqPromise;
+  jqPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = JQ_CDN;
+    script.onload = () => {
+      if (window.jq && window.jq.promised) resolve(window.jq.promised);
+      else if (window.jq) resolve(window.jq);
+      else reject(new Error('jq-web did not expose jq global'));
+    };
+    script.onerror = () => reject(new Error('Failed to load jq-web from CDN'));
+    document.head.appendChild(script);
+  });
+  return jqPromise;
+}
+
+function evalSimpleJqPath(filter, data) {
+  let current = data;
+  if (filter === '.' || filter === '') return current;
+  const stripped = filter.startsWith('.') ? filter.slice(1) : filter;
+  if (!stripped) return current;
+  const tokens = [];
+  let tok = '';
+  for (let i = 0; i < stripped.length; i++) {
+    const ch = stripped[i];
+    if (ch === '[') {
+      if (tok) { tokens.push({ type: 'key', val: tok }); tok = ''; }
+      let idx = ''; i++;
+      while (i < stripped.length && stripped[i] !== ']') idx += stripped[i++];
+      tokens.push({ type: 'index', val: isNaN(idx) ? idx.replace(/^["']|["']$/g, '') : parseInt(idx) });
+    } else if (ch === '.') {
+      if (tok) { tokens.push({ type: 'key', val: tok }); tok = ''; }
+    } else {
+      tok += ch;
+    }
+  }
+  if (tok) tokens.push({ type: 'key', val: tok });
+  for (const t of tokens) {
+    if (current == null) return null;
+    current = current[t.val];
+  }
+  return current;
+}
+
+function downloadJson(data, filename) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+const TreeNode = {
+  name: 'TreeNode',
+  props: {
+    data: { required: true },
+    path: { type: String, required: true },
+    collapsedPaths: { type: Array, required: true },
+    keyName: { type: String, default: null },
+    arrayIndex: { type: Number, default: null },
+  },
+  emits: ['toggle'],
+  setup(props, { emit }) {
+    const isObject    = Vue.computed(() => props.data !== null && typeof props.data === 'object' && !Array.isArray(props.data));
+    const isArray     = Vue.computed(() => Array.isArray(props.data));
+    const isPrimitive = Vue.computed(() => !isObject.value && !isArray.value);
+    const isCollapsed = Vue.computed(() => props.collapsedPaths.includes(props.path));
+    const childCount  = Vue.computed(() => {
+      if (isObject.value) return Object.keys(props.data).length;
+      if (isArray.value)  return props.data.length;
+      return 0;
+    });
+    const valueType = Vue.computed(() => {
+      if (props.data === null)             return 'null';
+      if (typeof props.data === 'string')  return 'string';
+      if (typeof props.data === 'number')  return 'number';
+      if (typeof props.data === 'boolean') return 'boolean';
+      return null;
+    });
+    const displayValue = Vue.computed(() => {
+      if (props.data === null) return 'null';
+      if (typeof props.data === 'string') return JSON.stringify(props.data);
+      return String(props.data);
+    });
+    const visibleCount = Vue.ref(RENDER_LIMIT_STEP);
+    const visibleItems = Vue.computed(() => {
+      if (isArray.value)  return props.data.slice(0, visibleCount.value);
+      if (isObject.value) return Object.entries(props.data).slice(0, visibleCount.value);
+      return [];
+    });
+    const hiddenCount = Vue.computed(() => Math.max(0, childCount.value - visibleCount.value));
+    function showMore() { visibleCount.value += RENDER_LIMIT_STEP; }
+    function onToggle(e) { e.stopPropagation(); emit('toggle', props.path); }
+    function childPath(key) {
+      if (isArray.value) return props.path + '[' + key + ']';
+      if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(String(key))) return props.path + '.' + key;
+      return props.path + '["' + String(key).replace(/"/g, '\\"') + '"]';
+    }
+    return { isObject, isArray, isPrimitive, isCollapsed, childCount,
+             valueType, displayValue, visibleItems, hiddenCount, showMore, onToggle, childPath };
+  },
+  components: {},
+  template: `
+    <div class="tree-node">
+      <span class="tree-row">
+        <span v-if="!isPrimitive" class="toggle-btn" @click="onToggle">{{ isCollapsed ? '▶' : '▼' }}</span>
+        <span v-else class="no-toggle"></span>
+        <span v-if="keyName !== null" class="jkey">"{{ keyName }}"</span>
+        <span v-if="arrayIndex !== null" class="array-idx">{{ arrayIndex }}</span>
+        <span v-if="keyName !== null || arrayIndex !== null" class="colon">:</span>
+        <template v-if="isPrimitive">
+          <span :class="'j' + valueType">{{ displayValue }}</span>
+        </template>
+        <template v-else-if="isObject">
+          <span class="jbrace">{{'{'}}</span>
+          <span v-if="isCollapsed" class="collapsed-hint">{{ childCount }} keys…</span>
+          <span v-else class="jbrace" style="opacity:0.35">…</span>
+        </template>
+        <template v-else>
+          <span class="jbrace">[</span>
+          <span v-if="isCollapsed" class="collapsed-hint">{{ childCount }} items…</span>
+          <span v-else class="jbrace" style="opacity:0.35">…</span>
+        </template>
+      </span>
+      <template v-if="!isPrimitive && !isCollapsed">
+        <div class="tree-indent">
+          <template v-if="isObject">
+            <tree-node v-for="[key, val] in visibleItems" :key="key" :data="val" :path="childPath(key)" :key-name="String(key)" :collapsed-paths="collapsedPaths" @toggle="$emit('toggle', $event)"></tree-node>
+          </template>
+          <template v-else>
+            <tree-node v-for="(val, idx) in visibleItems" :key="idx" :data="val" :path="childPath(idx)" :array-index="idx" :collapsed-paths="collapsedPaths" @toggle="$emit('toggle', $event)"></tree-node>
+          </template>
+          <button v-if="hiddenCount > 0" class="show-more-btn" @click.stop="showMore">
+            ▼ show {{ Math.min(hiddenCount, 100) }} more <span style="color:var(--muted)">({{ hiddenCount }} remaining)</span>
+          </button>
+        </div>
+        <span class="jbrace" style="margin-left:3px">{{ isObject ? '}' : ']' }}</span>
+      </template>
+      <template v-else-if="!isPrimitive && isCollapsed">
+        <span class="jbrace" style="margin-left:3px">{{ isObject ? '}' : ']' }}</span>
+      </template>
+    </div>
+  `
+};
+TreeNode.components = { TreeNode };
+
+const { createApp, ref, computed, reactive, watch } = Vue;
+
+const app = createApp({
+  components: { TreeNode },
+  setup() {
+    const rawInput       = ref('');
+    const parsedData     = ref(null);
+    const parseError     = ref('');
+    const isDragging     = ref(false);
+    const fileInput      = ref(null);
+    const collapsedPaths = ref([]);
+    const toast          = reactive({ visible: false, msg: '', type: 'success' });
+    const loadProgress   = ref(null);
+    const fileFullText   = ref(null);
+    const fileMeta       = ref(null);
+    const displayChars   = DISPLAY_CHARS;
+    let toastTimer = null;
+
+    function showToast(msg, type = 'success', duration = 3000) {
+      clearTimeout(toastTimer);
+      toast.msg = msg; toast.type = type; toast.visible = true;
+      toastTimer = setTimeout(() => { toast.visible = false; }, duration);
+    }
+
+    // ── PIPELINE STATE ──
+    const pipelineArrayPath   = ref('');
+    const pipelineSteps       = ref([]);
+    const activeStepId        = ref(null);
+    const addStepDropdownOpen = ref(false);
+    const pipelineRunning     = ref(false);
+    const treeView            = ref('transformed');
+    const pipelineEvalFlash   = ref(false);
+    let _evalFlashTimer = null;
+    let stepIdCounter = 0;
+    let ruleIdCounter = 0;
+
+    function newRule() {
+      return { id: ++ruleIdCounter, type: 'add', column: '', valueType: 'expr', value: '', condition: '', elsValue: 'null' };
+    }
+
+    function addStep(type) {
+      addStepDropdownOpen.value = false;
+      const step = { id: ++stepIdCounter, type };
+      if (type === 'filter') step.condition = '';
+      if (type === 'select') { step.columnsRaw = ''; step.valuesOnly = false; }
+      if (type === 'map')    step.rules = [newRule()];
+      pipelineSteps.value.push(step);
+      activeStepId.value = step.id;
+    }
+
+    function removeStep(i) {
+      const id = pipelineSteps.value[i].id;
+      pipelineSteps.value.splice(i, 1);
+      if (activeStepId.value === id) activeStepId.value = null;
+    }
+
+    function clearPipeline() { pipelineSteps.value = []; activeStepId.value = null; }
+
+    function toggleStep(id) { activeStepId.value = activeStepId.value === id ? null : id; }
+
+    function addStepRule(step) { step.rules.push(newRule()); }
+
+    function removeStepRule(step, ri) { step.rules.splice(ri, 1); }
+
+    // ── DRAG & DROP ──
+    const dragSrcIndex    = ref(null);
+    const dropInsertIndex = ref(null);
+    let _dragLeaveTimer = null;
+
+    function onDragStart(si, e) {
+      dragSrcIndex.value = si;
+      e.dataTransfer.effectAllowed = 'move';
+    }
+    function onDragOver(si, e) {
+      clearTimeout(_dragLeaveTimer);
+      if (dragSrcIndex.value === null) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      dropInsertIndex.value = e.clientY < rect.top + rect.height / 2 ? si : si + 1;
+    }
+    function onDragLeave() {
+      _dragLeaveTimer = setTimeout(() => { dropInsertIndex.value = null; }, 60);
+    }
+    function executeDrop() {
+      clearTimeout(_dragLeaveTimer);
+      const from = dragSrcIndex.value;
+      const to   = dropInsertIndex.value;
+      if (from === null || to === null) { onDragEnd(); return; }
+      const steps = pipelineSteps.value;
+      const moved = steps.splice(from, 1)[0];
+      steps.splice(to > from ? to - 1 : to, 0, moved);
+      dragSrcIndex.value    = null;
+      dropInsertIndex.value = null;
+    }
+    function onDragEnd() {
+      clearTimeout(_dragLeaveTimer);
+      dragSrcIndex.value    = null;
+      dropInsertIndex.value = null;
+    }
+
+    document.addEventListener('click', e => {
+      if (!e.target.closest('.add-step-wrap')) addStepDropdownOpen.value = false;
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Enter') triggerPipelineEval();
+    });
+
+    // ── JQ HELPERS ──
+    function ruleToJq(rule) {
+      if (rule.type === 'delete') {
+        const col = rule.column.trim();
+        if (!col) return null;
+        return 'del(.' + col + ')';
+      }
+      if (rule.type === 'add') {
+        const col = rule.column.trim();
+        if (!col) return null;
+        const val = rule.value.trim() || 'null';
+        return '. + {' + JSON.stringify(col) + ': (' + val + ')}';
+      }
+      if (rule.type === 'conditional') {
+        const col = rule.column.trim();
+        const cond = rule.condition.trim() || 'true';
+        const val = rule.value.trim() || 'null';
+        const els = rule.elsValue.trim() !== '' ? rule.elsValue.trim() : 'null';
+        if (!col) return null;
+        return '. + {' + JSON.stringify(col) + ': (if (' + cond + ') then (' + val + ') else (' + els + ') end)}';
+      }
+      return null;
+    }
+
+    function parseColumns(raw) {
+      return (raw || '').split(',').map(s => s.trim()).filter(Boolean);
+    }
+
+    function stepJq(step) {
+      if (step.type === 'filter') {
+        const c = step.condition.trim();
+        if (!c) return '';
+        return 'map(select(' + c + '))';
+      }
+      if (step.type === 'select') {
+        const cols = parseColumns(step.columnsRaw);
+        if (!cols.length) return '';
+        if (step.valuesOnly && cols.length === 1) return 'map(.' + cols[0] + ')';
+        return 'map({' + cols.map(c => JSON.stringify(c) + ': .' + c).join(', ') + '})';
+      }
+      if (step.type === 'map') {
+        const valid = step.rules.map(ruleToJq).filter(Boolean);
+        if (!valid.length) return '';
+        return 'map(' + valid.join(' | ') + ')';
+      }
+      return '';
+    }
+
+    const pipelineJqFilter = computed(() => {
+      const ap = pipelineArrayPath.value.trim();
+      if (!ap) return '';
+      const stepFilters = pipelineSteps.value.map(stepJq).filter(Boolean);
+      const arrayExpr = '(' + (ap === '.' ? '.' : ap) + ')';
+      if (!stepFilters.length) return arrayExpr;
+      return arrayExpr + ' | ' + stepFilters.join(' | ');
+    });
+
+    // ── JS FALLBACK ──
+    function evaluateExpr(expr, item, isConst) {
+      if (isConst) { try { return JSON.parse(expr); } catch {} return expr; }
+      const fn = new Function('item', 'with(item){return(' +
+        expr.replace(/^\./,'item.').replace(/(?<![a-zA-Z0-9_$\]])\./g, 'item.') + ')}');
+      return fn(item);
+    }
+
+    function applyRuleJs(rule, item) {
+      if (item == null || typeof item !== 'object') return item;
+      if (rule.type === 'delete') {
+        const col = rule.column.trim();
+        if (!col) return item;
+        const copy = { ...item };
+        delete copy[col];
+        return copy;
+      }
+      if (rule.type === 'add') {
+        const col = rule.column.trim();
+        if (!col) return item;
+        let val;
+        try { val = evaluateExpr(rule.value.trim() || 'null', item, rule.valueType === 'const'); } catch { val = null; }
+        return { ...item, [col]: val };
+      }
+      if (rule.type === 'conditional') {
+        const col = rule.column.trim();
+        if (!col) return item;
+        let condMet = false;
+        try { condMet = !!evaluateExpr(rule.condition.trim() || 'true', item, false); } catch {}
+        let val;
+        try { val = evaluateExpr(condMet ? (rule.value.trim() || 'null') : (rule.elsValue.trim() || 'null'), item, rule.valueType === 'const' && condMet); } catch { val = null; }
+        return { ...item, [col]: val };
+      }
+      return item;
+    }
+
+    function applyStepJs(step, arr) {
+      if (!Array.isArray(arr)) return arr;
+      if (step.type === 'filter') {
+        const cond = step.condition.trim();
+        if (!cond) return arr;
+        return arr.filter(item => {
+          try {
+            const fn = new Function('item', 'with(item){return !!((' +
+              cond.replace(/^\./,'item.').replace(/(?<![a-zA-Z0-9_$\]])\./g, 'item.') + '))}');
+            return fn(item);
+          } catch { return false; }
+        });
+      }
+      if (step.type === 'select') {
+        const cols = parseColumns(step.columnsRaw);
+        if (!cols.length) return arr;
+        if (step.valuesOnly && cols.length === 1) {
+          return arr.map(item => (item == null || typeof item !== 'object') ? item : item[cols[0]]);
+        }
+        return arr.map(item => {
+          if (item == null || typeof item !== 'object') return item;
+          const out = {};
+          cols.forEach(c => { out[c] = item[c]; });
+          return out;
+        });
+      }
+      if (step.type === 'map') {
+        const validRules = step.rules.filter(r => ruleToJq(r) !== null);
+        return arr.map(item => {
+          let out = item;
+          for (const rule of validRules) { try { out = applyRuleJs(rule, out); } catch {} }
+          return out;
+        });
+      }
+      return arr;
+    }
+
+    function getArrayForPath(ap) {
+      if (!parsedData.value) return null;
+      if (ap === '.' || ap === '') return Array.isArray(parsedData.value) ? parsedData.value : null;
+      const jqPath = ap.startsWith('.') ? ap.slice(1) : ap;
+      const result = evalSimpleJqPath(jqPath, parsedData.value);
+      return Array.isArray(result) ? result : null;
+    }
+
+    const pipelineResult = ref(null);
+
+    function flashEvalIndicator() {
+      clearTimeout(_evalFlashTimer);
+      pipelineEvalFlash.value = true;
+      _evalFlashTimer = setTimeout(() => { pipelineEvalFlash.value = false; }, 350);
+    }
+
+    const isLargeFile = computed(() => {
+      const ap = pipelineArrayPath.value.trim();
+      if (!ap || !parsedData.value) return false;
+      const arr = getArrayForPath(ap);
+      return Array.isArray(arr) && arr.length > LARGE_FILE_ROWS;
+    });
+
+    function computePipelineResult() {
+      flashEvalIndicator();
+      const ap = pipelineArrayPath.value.trim();
+      if (!ap || !parsedData.value || !pipelineSteps.value.length) { pipelineResult.value = null; return; }
+      try {
+        let arr = getArrayForPath(ap);
+        if (!arr) { pipelineResult.value = null; return; }
+        // cap preview to PREVIEW_CAP rows for performance
+        const capped = arr.length > PREVIEW_CAP ? arr.slice(0, PREVIEW_CAP) : arr;
+        let out = capped;
+        for (const step of pipelineSteps.value) out = applyStepJs(step, out);
+        if (ap === '.' || ap === '') { pipelineResult.value = out; return; }
+        const key = ap.replace(/^\./, '');
+        pipelineResult.value = { ...parsedData.value, [key]: out };
+      } catch { pipelineResult.value = null; }
+    }
+
+    function triggerPipelineEval() {
+      computePipelineResult();
+    }
+
+    let _pipelineDebounceTimer = null;
+    function schedulePipelineUpdate() {
+      if (isLargeFile.value) return; // large files: only eval on Enter
+      clearTimeout(_pipelineDebounceTimer);
+      _pipelineDebounceTimer = setTimeout(computePipelineResult, 400);
+    }
+
+    watch([pipelineArrayPath, parsedData], () => {
+      if (!isLargeFile.value) computePipelineResult();
+      else pipelineResult.value = null;
+    });
+    watch(pipelineSteps, schedulePipelineUpdate, { deep: true });
+
+    const displayData = computed(() => {
+      if (treeView.value === 'original' || pipelineResult.value === null) return parsedData.value;
+      return pipelineResult.value;
+    });
+
+    const pipelineArrayPathSuggestions = computed(() => {
+      const suggestions = new Set();
+      if (parsedData.value !== null) {
+        if (Array.isArray(parsedData.value)) {
+          suggestions.add('.');
+        } else if (parsedData.value && typeof parsedData.value === 'object') {
+          Object.entries(parsedData.value).forEach(([k, v]) => {
+            if (Array.isArray(v)) suggestions.add('.' + k);
+          });
+        }
+      }
+      return Array.from(suggestions);
+    });
+
+    const availableKeys = computed(() => {
+      const ap = pipelineArrayPath.value.trim();
+      if (!ap || !parsedData.value) return [];
+      const arr = getArrayForPath(ap);
+      if (!arr) return [];
+      const keySet = new Set();
+      arr.slice(0, 200).forEach(item => {
+        if (item && typeof item === 'object' && !Array.isArray(item))
+          Object.keys(item).forEach(k => keySet.add(k));
+      });
+      return Array.from(keySet);
+    });
+
+    function selectColumnActive(step, key) { return parseColumns(step.columnsRaw).includes(key); }
+
+    function toggleSelectColumn(step, key) {
+      const cols = parseColumns(step.columnsRaw);
+      const idx = cols.indexOf(key);
+      if (idx >= 0) cols.splice(idx, 1);
+      else cols.push(key);
+      step.columnsRaw = cols.join(', ');
+    }
+
+    function stepSummary(step) {
+      if (step.type === 'filter') {
+        const c = step.condition.trim();
+        if (!c) return '';
+        return 'where ' + (c.length > 32 ? c.slice(0, 32) + '…' : c);
+      }
+      if (step.type === 'select') {
+        const cols = parseColumns(step.columnsRaw);
+        if (!cols.length) return '';
+        const preview = cols.slice(0, 4).join(', ');
+        const suffix = cols.length > 4 ? ', …' : '';
+        return (step.valuesOnly && cols.length === 1 ? 'values of ' : 'keep ') + preview + suffix;
+      }
+      if (step.type === 'map') {
+        const n = step.rules.filter(r => ruleToJq(r) !== null).length;
+        return n > 0 ? n + ' rule' + (n !== 1 ? 's' : '') : '';
+      }
+      return '';
+    }
+
+    async function applyPipeline() {
+      if (!parsedData.value) return;
+      pipelineRunning.value = true;
+      const ap = pipelineArrayPath.value.trim();
+      const filter = pipelineJqFilter.value;
+      let result;
+      try {
+        let jqFn = null;
+        if (filter) {
+          try {
+            const jqApi = await loadJq();
+            if (typeof jqApi === 'function') {
+              jqFn = async (f, d) => { const r = await jqApi(d, f); return JSON.stringify(r, null, 2); };
+            } else if (jqApi && typeof jqApi.json === 'function') {
+              jqFn = async (f, d) => { const r = await jqApi.json(d, f); return JSON.stringify(r, null, 2); };
+            }
+          } catch (e) { console.warn('jq-web unavailable, using fallback:', e.message); }
+        }
+        if (jqFn && filter) {
+          result = await jqFn(filter, parsedData.value);
+        } else {
+          if (!ap) {
+            result = JSON.stringify(parsedData.value, null, 2);
+          } else {
+            let arr = getArrayForPath(ap);
+            if (!arr) throw new Error('No array found at path: ' + ap);
+            for (const step of pipelineSteps.value) arr = applyStepJs(step, arr);
+            if (ap === '.' || ap === '') {
+              result = JSON.stringify(arr, null, 2);
+            } else {
+              const key = ap.replace(/^\./, '');
+              result = JSON.stringify({ ...parsedData.value, [key]: arr }, null, 2);
+            }
+          }
+        }
+      } catch (e) {
+        pipelineRunning.value = false;
+        showToast('Pipeline error: ' + e.message, 'error', 5000);
+        return;
+      }
+      pipelineRunning.value = false;
+      let parsed;
+      try { parsed = JSON.parse(result); } catch { parsed = result; }
+      downloadJson(parsed, 'pipeline-output.json');
+      const rowCount = Array.isArray(parsed) ? parsed.length : 1;
+      showToast('✓ Downloaded pipeline-output.json (' + rowCount + ' item' + (rowCount !== 1 ? 's' : '') + ')');
+    }
+
+    // ── FILE / PARSE ──
+    function parseJSON() {
+      parseError.value = '';
+      const src = fileFullText.value ?? rawInput.value;
+      try {
+        parsedData.value     = JSON.parse(src.trim());
+        collapsedPaths.value = [];
+        if (!pipelineArrayPath.value && pipelineArrayPathSuggestions.value.length) {
+          pipelineArrayPath.value = pipelineArrayPathSuggestions.value[0];
+        }
+      } catch (e) {
+        parseError.value = e.message;
+        parsedData.value = null;
+      }
+    }
+
+    function triggerFileInput() { fileInput.value && fileInput.value.click(); }
+
+    function onFileChange(e) {
+      const file = e.target.files[0];
+      if (file) readFile(file);
+      e.target.value = '';
+    }
+
+    function onDrop(e) {
+      isDragging.value = false;
+      const file = e.dataTransfer.files[0];
+      if (file) readFile(file);
+    }
+
+    function readFile(file) {
+      const isLarge = file.size > DISPLAY_SIZE_LIMIT;
+      if (isLarge) loadProgress.value = 0;
+      const reader = new FileReader();
+      if (isLarge) {
+        reader.onprogress = e => {
+          if (e.lengthComputable) loadProgress.value = Math.min(99, Math.round((e.loaded / e.total) * 100));
+        };
+      }
+      reader.onload = ev => {
+        loadProgress.value = isLarge ? 100 : null;
+        const text = ev.target.result;
+        setTimeout(() => {
+          if (isLarge) {
+            fileFullText.value = text;
+            rawInput.value = text.slice(0, DISPLAY_CHARS);
+            fileMeta.value = { name: file.name, sizeMB: (file.size / 1048576).toFixed(2), truncated: true };
+          } else {
+            fileFullText.value = null;
+            fileMeta.value = { name: file.name, sizeMB: (file.size / 1048576).toFixed(2), truncated: false };
+            rawInput.value = text;
+          }
+          parseJSON();
+          loadProgress.value = null;
+        }, 30);
+      };
+      reader.onerror = () => { loadProgress.value = null; parseError.value = 'Failed to read file'; };
+      reader.readAsText(file);
+    }
+
+    function onTextareaInput() { fileFullText.value = null; fileMeta.value = null; }
+
+    function onToggle(path) {
+      const idx = collapsedPaths.value.indexOf(path);
+      if (idx >= 0) collapsedPaths.value = collapsedPaths.value.filter((_, i) => i !== idx);
+      else collapsedPaths.value = [...collapsedPaths.value, path];
+    }
+
+    watch(pipelineSteps, () => { treeView.value = 'transformed'; }, { deep: true });
+
+    return {
+      rawInput, parsedData, parseError, isDragging, fileInput,
+      collapsedPaths, toast, loadProgress, fileMeta, displayChars,
+      pipelineArrayPath, pipelineSteps, activeStepId,
+      addStepDropdownOpen, pipelineRunning, treeView, pipelineEvalFlash,
+      pipelineArrayPathSuggestions, availableKeys,
+      displayData, pipelineJqFilter, isLargeFile, triggerPipelineEval,
+      parseJSON, triggerFileInput, onFileChange, onDrop, onTextareaInput, onToggle,
+      addStep, removeStep, clearPipeline, toggleStep,
+      addStepRule, removeStepRule,
+      dragSrcIndex, dropInsertIndex, onDragStart, onDragOver, onDragLeave, executeDrop, onDragEnd,
+      stepSummary, stepJq, selectColumnActive, toggleSelectColumn,
+      parseColumns, applyPipeline,
+    };
+  }
+});
+
+app.mount('#app');
+</script>
+</body>
+</html>
