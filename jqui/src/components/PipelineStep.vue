@@ -29,13 +29,12 @@
 
       <!-- FILTER -->
       <template v-if="step.type === 'filter'">
-        <div v-if="availableKeys.length" style="display:flex;flex-wrap:wrap;gap:5px;">
+        <div v-if="availableKeys.length" class="key-chips">
           <button
             v-for="k in availableKeys"
             :key="k"
-            class="array-path-chip"
+            class="array-path-chip chip-sm"
             @click="$emit('paste-key', k)"
-            style="font-size:0.68rem;"
             :title="'Paste (.' + k + ') into condition'"
           >{{ k }}</button>
         </div>
@@ -63,31 +62,27 @@
             spellcheck="false"
           />
         </div>
-        <div v-if="availableKeys.length" style="display:flex;flex-wrap:wrap;gap:5px;">
+        <div v-if="availableKeys.length" class="key-chips">
           <button
             v-for="k in availableKeys"
             :key="k"
-            class="array-path-chip"
+            class="array-path-chip chip-sm"
             :class="{ active: isColumnActive(k) }"
             @click="$emit('toggle-column', k)"
-            style="font-size:0.68rem;"
           >{{ k }}</button>
         </div>
         <div class="step-hint">Keep only the listed fields per row.</div>
-        <label
-          v-if="parsedColumns.length === 1"
-          style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.78rem;color:var(--muted);user-select:none;"
-        >
-          <input type="checkbox" v-model="step.valuesOnly" style="accent-color:var(--accent);width:14px;height:14px;cursor:pointer;" />
+        <label v-if="parsedColumns.length === 1" class="values-only-label">
+          <input type="checkbox" v-model="step.valuesOnly" class="values-only-checkbox" />
           Return array of values
-          <span style="font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.7rem;color:var(--muted);">(e.g. [1, 2, 3])</span>
+          <span class="values-only-hint">(e.g. [1, 2, 3])</span>
         </label>
         <div v-if="jqPreview" class="step-jq-preview">{{ jqPreview }}</div>
       </template>
 
       <!-- MAP -->
       <template v-else-if="step.type === 'map'">
-        <div style="align-self:flex-start;">
+        <div class="map-type-row">
           <div class="rule-value-type-toggle">
             <button :class="{ active: step.rules[0].type === 'add' }"         @click="step.rules[0].type = 'add'">Add / Update</button>
             <button :class="{ active: step.rules[0].type === 'conditional' }" @click="step.rules[0].type = 'conditional'">Conditional</button>
@@ -267,6 +262,15 @@ function isColumnActive(key) { return parsedColumns.value.includes(key) }
   font-family: 'JetBrains Mono','Fira Code',monospace;
   background: var(--surface2); border-radius: var(--radius-sm); padding: 4px 8px;
 }
+.key-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip-sm { font-size: 0.68rem; }
+.values-only-label {
+  display: flex; align-items: center; gap: 8px;
+  cursor: pointer; font-size: 0.78rem; color: var(--muted); user-select: none;
+}
+.values-only-checkbox { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
+.values-only-hint { font-family: 'JetBrains Mono','Fira Code',monospace; font-size: 0.7rem; color: var(--muted); }
+.map-type-row { align-self: flex-start; }
 .array-path-chip {
   background: rgba(124,106,247,0.12); border: 1px solid rgba(124,106,247,0.35);
   border-radius: var(--radius-sm); padding: 3px 10px;

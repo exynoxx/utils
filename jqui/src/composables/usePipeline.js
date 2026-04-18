@@ -1,4 +1,4 @@
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onScopeDispose } from 'vue'
 import { LARGE_FILE_ROWS, PREVIEW_CAP } from '@/constants'
 import { stepToJq, applyStepJs, parseColumns, ruleToJq } from '@/utils/pipelineEval'
 import { evalSimpleJqPath } from '@/utils/jsonUtils'
@@ -34,6 +34,11 @@ export function usePipeline(parsedData) {
   let _evalFlashTimer        = null
   let _pipelineDebounceTimer = null
 
+  onScopeDispose(() => {
+    clearTimeout(_evalFlashTimer)
+    clearTimeout(_pipelineDebounceTimer)
+  })
+
   // ── Suggestions ─────────────────────────────────────────────────────────────
   const pipelineArrayPathSuggestions = computed(() => {
     const suggestions = new Set()
@@ -52,7 +57,7 @@ export function usePipeline(parsedData) {
   const availableKeys = computed(() => {
     const ap = pipelineArrayPath.value.trim()
     if (!ap || !parsedData.value) return []
-    const arr = _getArrayForPath(ap)
+    const arr = getArrayForPath(ap)
     if (!arr) return []
     const keySet = new Set()
     arr.slice(0, 200).forEach(item => {
@@ -76,7 +81,7 @@ export function usePipeline(parsedData) {
   const isLargeFile = computed(() => {
     const ap = pipelineArrayPath.value.trim()
     if (!ap || !parsedData.value) return false
-    const arr = _getArrayForPath(ap)
+    const arr = getArrayForPath(ap)
     return Array.isArray(arr) && arr.length > LARGE_FILE_ROWS
   })
 
@@ -191,7 +196,7 @@ export function usePipeline(parsedData) {
   }
 
   // ── Evaluation ───────────────────────────────────────────────────────────
-  function _getArrayForPath(ap) {
+  function getArrayForPath(ap) {
     if (!parsedData.value) return null
     if (ap === '.' || ap === '') return Array.isArray(parsedData.value) ? parsedData.value : null
     const jqPath = ap.startsWith('.') ? ap.slice(1) : ap
@@ -214,7 +219,7 @@ export function usePipeline(parsedData) {
       return
     }
     try {
-      let arr = _getArrayForPath(ap)
+      let arr = getArrayForPath(ap)
       if (!arr) { pipelineResult.value = null; pipelineStats.value = null; return }
       const total = arr.length
 
@@ -234,15 +239,15 @@ export function usePipeline(parsedData) {
         if (step.type !== 'filter') out = applyStepJs(step, out)
       }
       if (ap === '.' || ap === '') { pipelineResult.value = out; return }
-      const key = ap.replace(/^\./, '')
-      pipelineResult.value = { ...parsedData.value, [key]: out }
+      const segments = ap.replace(/^\./, '').split('.')
+      let rebuilt = out
+      for (let i = segments.length - 1; i > 0; i--) rebuilt = { [segments[i]]: rebuilt }
+      pipelineResult.value = { ...parsedData.value, [segments[0]]: rebuilt }
     } catch {
       pipelineResult.value = null
       pipelineStats.value  = null
     }
   }
-
-  function triggerPipelineEval() { computePipelineResult() }
 
   function schedulePipelineUpdate() {
     if (isLargeFile.value) {
@@ -259,10 +264,10 @@ export function usePipeline(parsedData) {
     else { pipelineResult.value = null; pipelineStats.value = null }
   })
 
-  watch(pipelineSteps, schedulePipelineUpdate, { deep: true })
-
-  // Reset treeView to 'transformed' whenever steps change
-  watch(pipelineSteps, () => { treeView.value = 'transformed' }, { deep: true })
+  watch(pipelineSteps, () => {
+    treeView.value = 'transformed'
+    schedulePipelineUpdate()
+  }, { deep: true })
 
   // Auto-suggest array path when data is first loaded
   function initArrayPath() {
@@ -278,14 +283,12 @@ export function usePipeline(parsedData) {
     pipelineArrayPathSuggestions, availableKeys, isLargeFile,
     // step ops
     addStep, removeStep, clearPipeline, toggleStep, pasteFilterKey,
-    selectColumnActive, toggleSelectColumn, stepSummary,
-    stepToJq,
-    parseColumns,
+    toggleSelectColumn, stepSummary,
     // drag
     dragSrcIndex, dropInsertIndex, draggableIndex,
     onDragStart, onContainerDragOver, shouldShowGap, executeDrop, onDragEnd,
     // eval
-    triggerPipelineEval, computePipelineResult, initArrayPath,
-    _getArrayForPath,
+    triggerPipelineEval: computePipelineResult, initArrayPath,
+    getArrayForPath,
   }
 }

@@ -66,13 +66,13 @@
         <!-- Add step buttons -->
         <div class="add-steps-row">
           <button class="add-step-segment" @click="$emit('add-step', 'filter')">
-            <span class="step-type-badge filter" style="pointer-events:none;">FILTER</span>
+            <span class="step-type-badge filter no-ptr">FILTER</span>
           </button>
           <button class="add-step-segment" @click="$emit('add-step', 'select')">
-            <span class="step-type-badge select" style="pointer-events:none;">SELECT</span>
+            <span class="step-type-badge select no-ptr">SELECT</span>
           </button>
           <button class="add-step-segment" @click="$emit('add-step', 'map')">
-            <span class="step-type-badge map" style="pointer-events:none;">MODIFY</span>
+            <span class="step-type-badge map no-ptr">MODIFY</span>
           </button>
         </div>
       </template>
@@ -215,6 +215,7 @@ defineEmits([
 .step-type-badge.filter { background: var(--yellow-dim); color: var(--yellow); border: 1px solid rgba(251,191,36,0.4); }
 .step-type-badge.select { background: var(--green-dim);  color: var(--green);  border: 1px solid rgba(52,211,153,0.4); }
 .step-type-badge.map    { background: rgba(124,106,247,0.15); color: var(--accent2); border: 1px solid rgba(124,106,247,0.4); }
+.no-ptr { pointer-events: none; }
 .jq-command-box { padding: 10px 14px 0; }
 .jq-command-label {
   font-size: 0.65rem; font-weight: 600; text-transform: uppercase;

@@ -78,7 +78,7 @@ export function applyRuleJs(rule, item) {
       val = evaluateExpr(
         condMet ? (rule.value.trim() || 'null') : (rule.elsValue.trim() || 'null'),
         item,
-        rule.valueType === 'const' && condMet
+        rule.valueType === 'const'
       )
     } catch { val = null }
     return { ...item, [col]: val }
@@ -118,17 +118,16 @@ export function applyStepJs(step, arr) {
   if (step.type === 'filter') {
     const cond = step.condition.trim()
     if (!cond) return arr
-    return arr.filter(item => {
-      try {
-        const fn = new Function(
-          'item',
-          'with(item){return !!((' +
-            cond.replace(/^\./g, 'item.').replace(/(?<![a-zA-Z0-9_$\]])\./g, 'item.') +
-          '))}'
-        )
-        return fn(item)
-      } catch { return false }
-    })
+    let fn
+    try {
+      fn = new Function(
+        'item',
+        'with(item){return !!((' +
+          cond.replace(/^\./g, 'item.').replace(/(?<![a-zA-Z0-9_$\]])\./, 'item.') +
+        '))}'
+      )
+    } catch { return arr }
+    return arr.filter(item => { try { return fn(item) } catch { return false } })
   }
   if (step.type === 'select') {
     const cols = parseColumns(step.columnsRaw)

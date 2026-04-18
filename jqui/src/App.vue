@@ -28,6 +28,7 @@
       :pipeline-stats="pipelineStats"
       @toggle="onToggle"
       @set-view="treeView = $event"
+      @eval="triggerPipelineEval"
     />
 
     <!-- RIGHT: Transform Pipeline -->
@@ -68,7 +69,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import AppHeader        from '@/components/AppHeader.vue'
 import JsonInputPanel   from '@/components/JsonInputPanel.vue'
 import JsonTreeViewer   from '@/components/JsonTreeViewer.vue'
@@ -97,25 +98,24 @@ const {
   pipelineResult, pipelineStats, pipelineJqFilter,
   pipelineArrayPathSuggestions, availableKeys, isLargeFile,
   addStep, removeStep, clearPipeline, toggleStep, pasteFilterKey,
-  selectColumnActive, toggleSelectColumn, stepSummary,
+  toggleSelectColumn, stepSummary,
   dragSrcIndex, dropInsertIndex, draggableIndex,
   onDragStart, onContainerDragOver, shouldShowGap, executeDrop, onDragEnd,
   triggerPipelineEval, initArrayPath,
-  _getArrayForPath,
+  getArrayForPath,
 } = usePipeline(parsedData)
 
 // ── Collapsed paths (tree viewer) ────────────────────────────────────────────
-const collapsedPaths = ref([])
+const collapsedPaths = ref(new Set())
 
 function onToggle(path) {
-  const idx = collapsedPaths.value.indexOf(path)
-  if (idx >= 0) collapsedPaths.value = collapsedPaths.value.filter((_, i) => i !== idx)
-  else collapsedPaths.value = [...collapsedPaths.value, path]
+  if (collapsedPaths.value.has(path)) collapsedPaths.value.delete(path)
+  else collapsedPaths.value.add(path)
 }
 
 // Reset collapsed paths when new data is parsed
 onParsed(() => {
-  collapsedPaths.value = []
+  collapsedPaths.value = new Set()
   initArrayPath()
 })
 
@@ -126,11 +126,14 @@ const displayData = computed(() => {
 })
 
 // ── Global keyboard shortcut (Enter → evaluate) ───────────────────────────────
-onMounted(() => {
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Enter') triggerPipelineEval()
-  })
-})
+function _onKeydown(e) {
+  if (e.key !== 'Enter') return
+  const tag = e.target.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+  triggerPipelineEval()
+}
+onMounted(() => document.addEventListener('keydown', _onKeydown))
+onUnmounted(() => document.removeEventListener('keydown', _onKeydown))
 
 // ── Download / apply pipeline ─────────────────────────────────────────────────
 async function applyPipeline() {
@@ -159,14 +162,16 @@ async function applyPipeline() {
       if (!ap) {
         result = JSON.stringify(parsedData.value, null, 2)
       } else {
-        let arr = _getArrayForPath(ap)
+        let arr = getArrayForPath(ap)
         if (!arr) throw new Error('No array found at path: ' + ap)
         for (const step of pipelineSteps.value) arr = applyStepJs(step, arr)
         if (ap === '.' || ap === '') {
           result = JSON.stringify(arr, null, 2)
         } else {
-          const key = ap.replace(/^\./, '')
-          result = JSON.stringify({ ...parsedData.value, [key]: arr }, null, 2)
+          const segments = ap.replace(/^\./, '').split('.')
+          let rebuilt = arr
+          for (let i = segments.length - 1; i > 0; i--) rebuilt = { [segments[i]]: rebuilt }
+          result = JSON.stringify({ ...parsedData.value, [segments[0]]: rebuilt }, null, 2)
         }
       }
     }

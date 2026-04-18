@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { DISPLAY_SIZE_LIMIT, DISPLAY_CHARS } from '@/constants'
 
 /**
@@ -57,7 +57,12 @@ export function useJsonFile() {
     fileMeta.value = null
   }
 
+  // Guard against race: if a new file is loaded before the previous read
+  // completes, discard the stale result.
+  let _readToken = 0
+
   function _readFile(file) {
+    const token = ++_readToken
     const isLarge = file.size > DISPLAY_SIZE_LIMIT
     if (isLarge) loadProgress.value = 0
     const reader = new FileReader()
@@ -68,6 +73,7 @@ export function useJsonFile() {
       }
     }
     reader.onload = ev => {
+      if (token !== _readToken) return
       loadProgress.value = isLarge ? 100 : null
       const text = ev.target.result
       setTimeout(() => {

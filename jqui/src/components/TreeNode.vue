@@ -12,12 +12,12 @@
       <template v-else-if="isObject">
         <span class="jbrace">{{'{'}}</span>
         <span v-if="isCollapsed" class="collapsed-hint">{{ childCount }} keys…</span>
-        <span v-else class="jbrace" style="opacity:0.35">…</span>
+        <span v-else class="jbrace dim">…</span>
       </template>
       <template v-else>
         <span class="jbrace">[</span>
         <span v-if="isCollapsed" class="collapsed-hint">{{ childCount }} items…</span>
-        <span v-else class="jbrace" style="opacity:0.35">…</span>
+        <span v-else class="jbrace dim">…</span>
       </template>
     </span>
 
@@ -47,13 +47,13 @@
         </template>
         <button v-if="hiddenCount > 0" class="show-more-btn" @click.stop="showMore">
           ▼ show {{ Math.min(hiddenCount, 100) }} more
-          <span style="color:var(--muted)">({{ hiddenCount }} remaining)</span>
+          <span class="remaining-count">({{ hiddenCount }} remaining)</span>
         </button>
       </div>
-      <span class="jbrace" style="margin-left:3px">{{ isObject ? '}' : ']' }}</span>
+      <span class="jbrace closing-brace">{{ isObject ? '}' : ']' }}</span>
     </template>
     <template v-else-if="!isPrimitive && isCollapsed">
-      <span class="jbrace" style="margin-left:3px">{{ isObject ? '}' : ']' }}</span>
+      <span class="jbrace closing-brace">{{ isObject ? '}' : ']' }}</span>
     </template>
   </div>
 </template>
@@ -65,7 +65,7 @@ import { RENDER_LIMIT_STEP } from '@/constants'
 const props = defineProps({
   data:           { required: true },
   path:           { type: String, required: true },
-  collapsedPaths: { type: Array, required: true },
+  collapsedPaths: { required: true },
   keyName:        { type: String, default: null },
   arrayIndex:     { type: Number, default: null },
 })
@@ -74,7 +74,7 @@ const emit = defineEmits(['toggle'])
 const isObject    = computed(() => props.data !== null && typeof props.data === 'object' && !Array.isArray(props.data))
 const isArray     = computed(() => Array.isArray(props.data))
 const isPrimitive = computed(() => !isObject.value && !isArray.value)
-const isCollapsed = computed(() => props.collapsedPaths.includes(props.path))
+const isCollapsed = computed(() => props.collapsedPaths.has(props.path))
 
 const childCount = computed(() => {
   if (isObject.value) return Object.keys(props.data).length
@@ -152,4 +152,7 @@ function childPath(key) {
   transition: border-color 0.15s, color 0.15s;
 }
 .show-more-btn:hover { border-color: var(--accent); color: var(--accent2); }
+.dim { opacity: 0.35; }
+.closing-brace { margin-left: 3px; }
+.remaining-count { color: var(--muted); }
 </style>

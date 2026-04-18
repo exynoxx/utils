@@ -14,9 +14,9 @@ export function loadJq() {
     script.onload = () => {
       if (window.jq && window.jq.promised) resolve(window.jq.promised)
       else if (window.jq) resolve(window.jq)
-      else reject(new Error('jq-web did not expose jq global'))
+      else { jqPromise = null; reject(new Error('jq-web did not expose jq global')) }
     }
-    script.onerror = () => reject(new Error('Failed to load jq-web from CDN'))
+    script.onerror = () => { jqPromise = null; reject(new Error('Failed to load jq-web from CDN')) }
     document.head.appendChild(script)
   })
   return jqPromise

@@ -1,4 +1,4 @@
-import { ref, reactive } from 'vue'
+import { reactive, onScopeDispose } from 'vue'
 
 /**
  * Provides a toast notification system.
@@ -7,6 +7,8 @@ import { ref, reactive } from 'vue'
 export function useToast() {
   const toast = reactive({ visible: false, msg: '', type: 'success' })
   let toastTimer = null
+
+  onScopeDispose(() => clearTimeout(toastTimer))
 
   function showToast(msg, type = 'success', duration = 3000) {
     clearTimeout(toastTimer)

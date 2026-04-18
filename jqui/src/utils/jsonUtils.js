@@ -16,7 +16,7 @@ export function evalSimpleJqPath(filter, data) {
       if (tok) { tokens.push({ type: 'key', val: tok }); tok = '' }
       let idx = ''; i++
       while (i < stripped.length && stripped[i] !== ']') idx += stripped[i++]
-      tokens.push({ type: 'index', val: isNaN(idx) ? idx.replace(/^["']|["']$/g, '') : parseInt(idx) })
+      tokens.push({ type: 'index', val: isNaN(idx) ? idx.replace(/^["']|["']$/g, '') : parseInt(idx, 10) })
     } else if (ch === '.') {
       if (tok) { tokens.push({ type: 'key', val: tok }); tok = '' }
     } else {

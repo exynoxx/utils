@@ -13,9 +13,11 @@
           v-if="isLargeFile"
           title="Large file: preview capped at 50 rows. Press Enter to evaluate."
           class="large-badge"
+          style="cursor:pointer"
+          @click="$emit('eval')"
         >⚡ Large — Enter to eval</span>
         <span v-if="pipelineStats !== null" class="stats-label">
-          <span style="color:var(--green);">{{ pipelineStats.result.toLocaleString() }}</span>
+          <span class="stats-value">{{ pipelineStats.result.toLocaleString() }}</span>
           <span> of {{ pipelineStats.total.toLocaleString() }}</span>
         </span>
       </div>
@@ -49,14 +51,14 @@ import TreeNode from './TreeNode.vue'
 defineProps({
   parsedData:     { default: null },
   displayData:    { default: null },
-  collapsedPaths: { type: Array,   required: true },
+  collapsedPaths: { required: true },
   treeView:       { type: String,  required: true },
   hasSteps:       { type: Boolean, default: false },
   stepCount:      { type: Number,  default: 0 },
   isLargeFile:    { type: Boolean, default: false },
   pipelineStats:  { type: Object,  default: null },
 })
-defineEmits(['toggle', 'set-view'])
+defineEmits(['toggle', 'set-view', 'eval'])
 </script>
 
 <style scoped>
@@ -85,7 +87,9 @@ defineEmits(['toggle', 'set-view'])
   background: rgba(251,191,36,0.15); border: 1px solid rgba(251,191,36,0.4);
   color: var(--yellow); padding: 2px 7px; border-radius: 99px; text-transform: uppercase;
 }
+.large-badge:hover { background: rgba(251,191,36,0.28); }
 .stats-label { font-size: 0.75rem; font-weight: 600; color: var(--muted); }
+.stats-value { color: var(--green); }
 .mid-view-toggle { display: flex; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
 .mid-view-toggle button {
   background: var(--surface3); border: none; padding: 4px 10px;
