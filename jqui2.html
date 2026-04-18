@@ -881,7 +881,7 @@ const app = createApp({
     function addStep(type) {
       const step = { id: ++stepIdCounter, type };
       if (type === 'filter') step.condition = '';
-      if (type === 'select') { step.columnsRaw = ''; step.valuesOnly = false; }
+      if (type === 'select') { step.columnsRaw = ''; step.valuesOnly = true; }
       if (type === 'map')    step.rules = [newRule()];
       pipelineSteps.value.push(step);
       activeStepId.value = step.id;
