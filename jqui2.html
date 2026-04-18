@@ -294,22 +294,19 @@
     .add-rule-btn:hover { border-color: var(--accent); background: var(--accent-glow); }
     .right-footer { padding: 12px 14px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: stretch; }
     .add-step-wrap { position: relative; flex: 1; }
-    .add-step-btn {
-      width: 100%; padding: 10px 12px;
-      background: var(--surface2); border: 1px dashed var(--accent);
-      border-radius: var(--radius-sm); color: var(--accent2); font-size: 0.82rem; font-weight: 600;
-      cursor: pointer; transition: background 0.15s, border-color 0.15s;
-      display: flex; align-items: center; justify-content: center; gap: 6px;
+    .add-steps-row {
+      display: flex; flex-shrink: 0;
+      border: 1px dashed var(--accent); border-radius: var(--radius-sm); overflow: hidden;
     }
-    .add-step-btn:hover { background: var(--accent-glow); }
-    .add-step-dropdown {
-      margin-top: 4px; width: 100%;
-      background: var(--surface2); border: 1px solid var(--border);
-      border-radius: var(--radius-sm); overflow: hidden;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.45); z-index: 50;
+    .add-step-segment {
+      flex: 1; padding: 8px 6px;
+      background: var(--surface2); border: none; border-right: 1px solid var(--border);
+      color: var(--accent2); font-size: 0.75rem; font-weight: 600;
+      cursor: pointer; transition: background 0.15s;
+      display: flex; align-items: center; justify-content: center;
     }
-    .add-step-option { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; font-size: 0.82rem; transition: background 0.12s; }
-    .add-step-option:hover { background: var(--hover-bg); }
+    .add-step-segment:last-child { border-right: none; }
+    .add-step-segment:hover { background: var(--accent-glow); }
     .download-btn {
       padding: 10px 14px; flex: 1;
       background: linear-gradient(135deg, var(--green), #059669);
@@ -513,13 +510,13 @@
             <div
               class="pipeline-step-card"
               :class="{ expanded: activeStepId === step.id, 'dragging-source': dragSrcIndex === si }"
-              draggable="true"
+              :draggable="draggableIndex === si"
               @dragstart="onDragStart(si, $event)"
               @dragend="onDragEnd"
             >
             <div class="pipeline-step-card-header" @click="toggleStep(step.id)">
-              <span class="drag-handle" @mousedown.stop title="Drag to reorder">⁙</span>
-              <span class="step-type-badge" :class="step.type">{{ step.type.toUpperCase() }}</span>
+              <span class="drag-handle" @mousedown.stop="draggableIndex = si" @mouseup.stop="draggableIndex = null" title="Drag to reorder">⁙</span>
+              <span class="step-type-badge" :class="step.type">{{ step.type === 'map' ? 'MODIFY' : step.type.toUpperCase() }}</span>
               <span class="step-summary" :class="{ empty: !stepSummary(step) }">
                 {{ stepSummary(step) || 'click to configure…' }}
               </span>
@@ -531,6 +528,16 @@
 
               <!-- FILTER -->
               <template v-if="step.type === 'filter'">
+                <div v-if="availableKeys.length" style="display:flex;flex-wrap:wrap;gap:5px;">
+                  <button
+                    v-for="k in availableKeys"
+                    :key="k"
+                    class="array-path-chip"
+                    @click="pasteFilterKey(step, k)"
+                    style="font-size:0.68rem;"
+                    title="Paste (.{{ k }}) into condition"
+                  >{{ k }}</button>
+                </div>
                 <div>
                   <div class="step-field-label">Condition</div>
                   <input
@@ -576,74 +583,57 @@
 
               <!-- MAP -->
               <template v-else-if="step.type === 'map'">
-                <div class="rules-list">
-                  <div v-for="(rule, ri) in step.rules" :key="rule.id" class="rule-card">
-                    <div class="rule-card-header">
-                      <select class="rule-type-select" v-model="rule.type">
-                        <option value="add">Add / Update</option>
-                        <option value="conditional">Conditional</option>
-                        <option value="delete">Delete</option>
-                      </select>
-                      <button class="rule-remove-btn" @click="removeStepRule(step, ri)" title="Remove">✕</button>
-                    </div>
-
-                    <template v-if="rule.type === 'add'">
-                      <div class="rule-fields">
-                        <div class="rule-field-row">
-                          <span class="rule-field-label">Column</span>
-                          <input class="rule-input" v-model="rule.column" placeholder="new_or_existing_key" spellcheck="false" />
-                        </div>
-                        <div class="rule-field-row">
-                          <span class="rule-field-label">Value</span>
-                          <div class="rule-value-type-toggle">
-                            <button :class="{ active: rule.valueType === 'expr' }" @click="rule.valueType = 'expr'">Expr</button>
-                            <button :class="{ active: rule.valueType === 'const' }" @click="rule.valueType = 'const'">Const</button>
-                          </div>
-                          <input class="rule-input" v-model="rule.value" :placeholder="rule.valueType === 'expr' ? '.price * 1.2' : '&quot;hello&quot;  or  42'" spellcheck="false" />
-                        </div>
-                        <div class="rule-cond-hint" v-if="rule.valueType === 'expr'">e.g. <code>.price * 1.1</code> &nbsp; <code>.first + " " + .last</code></div>
-                      </div>
-                    </template>
-
-                    <template v-else-if="rule.type === 'conditional'">
-                      <div class="rule-fields">
-                        <div class="rule-field-row">
-                          <span class="rule-field-label">Column</span>
-                          <input class="rule-input" v-model="rule.column" placeholder="key_to_set" spellcheck="false" />
-                        </div>
-                        <div class="rule-field-row">
-                          <span class="rule-field-label">Condition</span>
-                          <input class="rule-input" v-model="rule.condition" placeholder=".status == &quot;active&quot;" spellcheck="false" />
-                        </div>
-                        <div class="rule-field-row">
-                          <span class="rule-field-label">If true</span>
-                          <div class="rule-value-type-toggle">
-                            <button :class="{ active: rule.valueType === 'expr' }" @click="rule.valueType = 'expr'">Expr</button>
-                            <button :class="{ active: rule.valueType === 'const' }" @click="rule.valueType = 'const'">Const</button>
-                          </div>
-                          <input class="rule-input" v-model="rule.value" :placeholder="rule.valueType === 'expr' ? '.price * 0.9' : '&quot;yes&quot;'" spellcheck="false" />
-                        </div>
-                        <div class="rule-field-row">
-                          <span class="rule-field-label">If false</span>
-                          <input class="rule-input" v-model="rule.elsValue" :placeholder="rule.valueType === 'expr' ? '.price' : '&quot;no&quot;'" spellcheck="false" />
-                        </div>
-                        <div class="rule-cond-hint"><code>if (condition) then true_val else false_val end</code></div>
-                      </div>
-                    </template>
-
-                    <template v-else-if="rule.type === 'delete'">
-                      <div class="rule-fields">
-                        <div class="rule-field-row">
-                          <span class="rule-field-label">Column</span>
-                          <input class="rule-input" v-model="rule.column" placeholder="key_to_remove" spellcheck="false" />
-                        </div>
-                        <div class="rule-cond-hint">Generates: <code>del(.key)</code></div>
-                      </div>
-                    </template>
+                <div style="align-self:flex-start;">
+                  <div class="rule-value-type-toggle">
+                    <button :class="{ active: step.rules[0].type === 'add' }" @click="step.rules[0].type = 'add'">Add / Update</button>
+                    <button :class="{ active: step.rules[0].type === 'conditional' }" @click="step.rules[0].type = 'conditional'">Conditional</button>
                   </div>
-
-                  <button class="add-rule-btn" @click="addStepRule(step)">+ Add rule</button>
                 </div>
+
+                <template v-if="step.rules[0].type === 'add'">
+                  <div class="rule-fields">
+                    <div class="rule-field-row">
+                      <span class="rule-field-label">Column</span>
+                      <input class="rule-input" v-model="step.rules[0].column" placeholder="new_or_existing_key" spellcheck="false" />
+                    </div>
+                    <div class="rule-field-row">
+                      <span class="rule-field-label">Value</span>
+                      <div class="rule-value-type-toggle">
+                        <button :class="{ active: step.rules[0].valueType === 'expr' }" @click="step.rules[0].valueType = 'expr'">Expr</button>
+                        <button :class="{ active: step.rules[0].valueType === 'const' }" @click="step.rules[0].valueType = 'const'">Const</button>
+                      </div>
+                      <input class="rule-input" v-model="step.rules[0].value" :placeholder="step.rules[0].valueType === 'expr' ? '.price * 1.2' : '&quot;hello&quot;  or  42'" spellcheck="false" />
+                    </div>
+                    <div class="rule-cond-hint" v-if="step.rules[0].valueType === 'expr'">e.g. <code>.price * 1.1</code> &nbsp; <code>.first + " " + .last</code></div>
+                  </div>
+                </template>
+
+                <template v-else-if="step.rules[0].type === 'conditional'">
+                  <div class="rule-fields">
+                    <div class="rule-field-row">
+                      <span class="rule-field-label">Column</span>
+                      <input class="rule-input" v-model="step.rules[0].column" placeholder="key_to_set" spellcheck="false" />
+                    </div>
+                    <div class="rule-field-row">
+                      <span class="rule-field-label">Condition</span>
+                      <input class="rule-input" v-model="step.rules[0].condition" placeholder=".status == &quot;active&quot;" spellcheck="false" />
+                    </div>
+                    <div class="rule-field-row">
+                      <span class="rule-field-label">If true</span>
+                      <div class="rule-value-type-toggle">
+                        <button :class="{ active: step.rules[0].valueType === 'expr' }" @click="step.rules[0].valueType = 'expr'">Expr</button>
+                        <button :class="{ active: step.rules[0].valueType === 'const' }" @click="step.rules[0].valueType = 'const'">Const</button>
+                      </div>
+                      <input class="rule-input" v-model="step.rules[0].value" :placeholder="step.rules[0].valueType === 'expr' ? '.price * 0.9' : '&quot;yes&quot;'" spellcheck="false" />
+                    </div>
+                    <div class="rule-field-row">
+                      <span class="rule-field-label">If false</span>
+                      <input class="rule-input" v-model="step.rules[0].elsValue" :placeholder="step.rules[0].valueType === 'expr' ? '.price' : '&quot;no&quot;'" spellcheck="false" />
+                    </div>
+                    <div class="rule-cond-hint"><code>if (condition) then true_val else false_val end</code></div>
+                  </div>
+                </template>
+
                 <div v-if="stepJq(step)" class="step-jq-preview">{{ stepJq(step) }}</div>
               </template>
 
@@ -651,25 +641,17 @@
             </div>
           </div>
           <div class="drop-gap" v-if="shouldShowGap(pipelineSteps.length)"></div>
-        <!-- Add step button — below last card -->
-        <div class="add-step-wrap" v-if="parsedData !== null" style="flex:unset;">
-          <button class="add-step-btn" @click="addStepDropdownOpen = !addStepDropdownOpen">
-            + Add step ▾
+        <!-- Add step buttons -->
+        <div v-if="parsedData !== null" class="add-steps-row">
+          <button class="add-step-segment" @click="addStep('filter')">
+            <span class="step-type-badge filter" style="pointer-events:none;">FILTER</span>
           </button>
-          <div v-if="addStepDropdownOpen" class="add-step-dropdown">
-            <div class="add-step-option" @click="addStep('filter')">
-              <span class="step-type-badge filter">FILTER</span>
-              <span style="font-size:0.8rem;">Filter rows by condition</span>
-            </div>
-            <div class="add-step-option" @click="addStep('select')">
-              <span class="step-type-badge select">SELECT</span>
-              <span style="font-size:0.8rem;">Keep specific columns</span>
-            </div>
-            <div class="add-step-option" @click="addStep('map')">
-              <span class="step-type-badge map">MAP</span>
-              <span style="font-size:0.8rem;">Add / update / delete columns</span>
-            </div>
-          </div>
+          <button class="add-step-segment" @click="addStep('select')">
+            <span class="step-type-badge select" style="pointer-events:none;">SELECT</span>
+          </button>
+          <button class="add-step-segment" @click="addStep('map')">
+            <span class="step-type-badge map" style="pointer-events:none;">MODIFY</span>
+          </button>
         </div>
         </template>
       </div>
@@ -884,7 +866,7 @@ const app = createApp({
     const pipelineArrayPath   = ref('');
     const pipelineSteps       = ref([]);
     const activeStepId        = ref(null);
-    const addStepDropdownOpen = ref(false);
+
     const pipelineRunning     = ref(false);
     const treeView            = ref('transformed');
     const pipelineEvalFlash   = ref(false);
@@ -897,7 +879,6 @@ const app = createApp({
     }
 
     function addStep(type) {
-      addStepDropdownOpen.value = false;
       const step = { id: ++stepIdCounter, type };
       if (type === 'filter') step.condition = '';
       if (type === 'select') { step.columnsRaw = ''; step.valuesOnly = false; }
@@ -916,13 +897,14 @@ const app = createApp({
 
     function toggleStep(id) { activeStepId.value = activeStepId.value === id ? null : id; }
 
-    function addStepRule(step) { step.rules.push(newRule()); }
-
-    function removeStepRule(step, ri) { step.rules.splice(ri, 1); }
+    function pasteFilterKey(step, key) {
+      step.condition = (step.condition || '') + '(.' + key + ')';
+    }
 
     // ── DRAG & DROP ──
     const dragSrcIndex    = ref(null);
     const dropInsertIndex = ref(null);
+    const draggableIndex  = ref(null);
 
     function onDragStart(si, e) {
       dragSrcIndex.value    = si;
@@ -964,11 +946,8 @@ const app = createApp({
     function onDragEnd() {
       dragSrcIndex.value    = null;
       dropInsertIndex.value = null;
+      draggableIndex.value  = null;
     }
-
-    document.addEventListener('click', e => {
-      if (!e.target.closest('.add-step-wrap')) addStepDropdownOpen.value = false;
-    });
 
     document.addEventListener('keydown', e => {
       if (e.key === 'Enter') triggerPipelineEval();
@@ -1217,8 +1196,10 @@ const app = createApp({
         return (step.valuesOnly && cols.length === 1 ? 'values of ' : 'keep ') + preview + suffix;
       }
       if (step.type === 'map') {
-        const n = step.rules.filter(r => ruleToJq(r) !== null).length;
-        return n > 0 ? n + ' rule' + (n !== 1 ? 's' : '') : '';
+        const rule = step.rules[0];
+        const col = rule.column.trim();
+        if (!col) return '';
+        return (rule.type === 'conditional' ? 'if … → ' : '') + col;
       }
       return '';
     }
@@ -1345,15 +1326,14 @@ const app = createApp({
       rawInput, parsedData, parseError, isDragging, fileInput,
       collapsedPaths, toast, loadProgress, fileMeta, displayChars,
       pipelineArrayPath, pipelineSteps, activeStepId,
-      addStepDropdownOpen, pipelineRunning, treeView, pipelineEvalFlash,
+      pipelineRunning, treeView, pipelineEvalFlash,
       pipelineArrayPathSuggestions, availableKeys,
       displayData, pipelineJqFilter, isLargeFile, triggerPipelineEval,
       parseJSON, triggerFileInput, onFileChange, onDrop, onTextareaInput, onToggle,
       addStep, removeStep, clearPipeline, toggleStep,
-      addStepRule, removeStepRule,
-      dragSrcIndex, dropInsertIndex, onDragStart, onContainerDragOver, shouldShowGap, executeDrop, onDragEnd,
+      dragSrcIndex, dropInsertIndex, draggableIndex, onDragStart, onContainerDragOver, shouldShowGap, executeDrop, onDragEnd,
       stepSummary, stepJq, selectColumnActive, toggleSelectColumn,
-      parseColumns, applyPipeline,
+      parseColumns, applyPipeline, pasteFilterKey,
     };
   }
 });
