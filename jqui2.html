@@ -439,10 +439,6 @@
             <span v-else class="mid-status-badge active">⚡ Pipeline active — {{ pipelineSteps.length }} step{{ pipelineSteps.length !== 1 ? 's' : '' }}</span>
           </template>
           <span v-if="isLargeFile" title="Large file: preview capped at 50 rows. Press Enter to evaluate." style="font-size:0.65rem;font-weight:600;letter-spacing:0.05em;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.4);color:var(--yellow);padding:2px 7px;border-radius:99px;text-transform:uppercase;">⚡ Large — Enter to eval</span>
-          <span v-if="pipelineStats !== null" style="font-size:0.75rem;font-weight:600;color:var(--muted);">
-            <span style="color:var(--green);">{{ pipelineStats.result.toLocaleString() }}</span>
-            <span> of {{ pipelineStats.total.toLocaleString() }}</span>
-          </span>
         </div>
         <div v-if="parsedData !== null && pipelineSteps.length > 0" class="mid-view-toggle">
           <button :class="{ active: treeView === 'transformed' }" @click="treeView = 'transformed'">Transformed</button>
@@ -519,7 +515,7 @@
               @dragend="onDragEnd"
             >
             <div class="pipeline-step-card-header" @click="toggleStep(step.id)">
-              <span class="drag-handle" @mousedown.stop="draggableIndex = si" @mouseup.stop="draggableIndex = null" title="Drag to reorder">⠿</span>
+              <span class="drag-handle" @mousedown.stop="draggableIndex = si" @mouseup.stop="draggableIndex = null" title="Drag to reorder">⁙</span>
               <span class="step-type-badge" :class="step.type">{{ step.type === 'map' ? 'MODIFY' : step.type.toUpperCase() }}</span>
               <span class="step-summary" :class="{ empty: !stepSummary(step) }">
                 {{ stepSummary(step) || 'click to configure…' }}
@@ -1096,7 +1092,6 @@ const app = createApp({
     }
 
     const pipelineResult = ref(null);
-    const pipelineStats   = ref(null);
 
     function flashEvalIndicator() {
       clearTimeout(_evalFlashTimer);
@@ -1114,28 +1109,18 @@ const app = createApp({
     function computePipelineResult() {
       flashEvalIndicator();
       const ap = pipelineArrayPath.value.trim();
-      if (!ap || !parsedData.value || !pipelineSteps.value.length) { pipelineResult.value = null; pipelineStats.value = null; return; }
+      if (!ap || !parsedData.value || !pipelineSteps.value.length) { pipelineResult.value = null; return; }
       try {
         let arr = getArrayForPath(ap);
-        if (!arr) { pipelineResult.value = null; pipelineStats.value = null; return; }
-        const total = arr.length;
-        // Step 1: apply filter steps to the FULL array for an accurate result count
-        let filtered = arr;
-        for (const step of pipelineSteps.value) {
-          if (step.type === 'filter') filtered = applyStepJs(step, filtered);
-        }
-        pipelineStats.value = { result: filtered.length, total };
-        // Step 2: cap the filter-reduced array to PREVIEW_CAP rows for display performance
-        const preview = filtered.length > PREVIEW_CAP ? filtered.slice(0, PREVIEW_CAP) : filtered;
-        // Step 3: apply only select/map steps to the small preview slice
-        let out = preview;
-        for (const step of pipelineSteps.value) {
-          if (step.type !== 'filter') out = applyStepJs(step, out);
-        }
+        if (!arr) { pipelineResult.value = null; return; }
+        // cap preview to PREVIEW_CAP rows for performance
+        const capped = arr.length > PREVIEW_CAP ? arr.slice(0, PREVIEW_CAP) : arr;
+        let out = capped;
+        for (const step of pipelineSteps.value) out = applyStepJs(step, out);
         if (ap === '.' || ap === '') { pipelineResult.value = out; return; }
         const key = ap.replace(/^\./, '');
         pipelineResult.value = { ...parsedData.value, [key]: out };
-      } catch { pipelineResult.value = null; pipelineStats.value = null; }
+      } catch { pipelineResult.value = null; }
     }
 
     function triggerPipelineEval() {
@@ -1144,19 +1129,14 @@ const app = createApp({
 
     let _pipelineDebounceTimer = null;
     function schedulePipelineUpdate() {
-      if (isLargeFile.value) {
-        // large files: only eval on Enter — clear stale stats immediately
-        pipelineResult.value = null;
-        pipelineStats.value  = null;
-        return;
-      }
+      if (isLargeFile.value) return; // large files: only eval on Enter
       clearTimeout(_pipelineDebounceTimer);
       _pipelineDebounceTimer = setTimeout(computePipelineResult, 400);
     }
 
     watch([pipelineArrayPath, parsedData], () => {
       if (!isLargeFile.value) computePipelineResult();
-      else { pipelineResult.value = null; pipelineStats.value = null; }
+      else pipelineResult.value = null;
     });
     watch(pipelineSteps, schedulePipelineUpdate, { deep: true });
 
@@ -1348,7 +1328,7 @@ const app = createApp({
       pipelineArrayPath, pipelineSteps, activeStepId,
       pipelineRunning, treeView, pipelineEvalFlash,
       pipelineArrayPathSuggestions, availableKeys,
-      displayData, pipelineJqFilter, pipelineStats, isLargeFile, triggerPipelineEval,
+      displayData, pipelineJqFilter, isLargeFile, triggerPipelineEval,
       parseJSON, triggerFileInput, onFileChange, onDrop, onTextareaInput, onToggle,
       addStep, removeStep, clearPipeline, toggleStep,
       dragSrcIndex, dropInsertIndex, draggableIndex, onDragStart, onContainerDragOver, shouldShowGap, executeDrop, onDragEnd,
