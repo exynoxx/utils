@@ -477,7 +477,7 @@
         >clear</button>
       </div>
 
-      <div class="pipeline-area">
+      <div class="pipeline-area" @dragover.prevent="onContainerDragOver" @drop.prevent="executeDrop">
         <!-- Array path (shown when data is loaded) -->
         <div v-if="parsedData !== null" class="array-path-section">
           <div class="array-path-label">Array path</div>
@@ -509,15 +509,12 @@
             v-for="(step, si) in pipelineSteps"
             :key="step.id"
           >
-            <div class="drop-gap" v-if="dragSrcIndex !== null && dropInsertIndex === si"></div>
+            <div class="drop-gap" v-if="shouldShowGap(si)"></div>
             <div
               class="pipeline-step-card"
               :class="{ expanded: activeStepId === step.id, 'dragging-source': dragSrcIndex === si }"
               draggable="true"
               @dragstart="onDragStart(si, $event)"
-              @dragover.prevent="onDragOver(si, $event)"
-              @dragleave="onDragLeave"
-              @drop.prevent="executeDrop"
               @dragend="onDragEnd"
             >
             <div class="pipeline-step-card-header" @click="toggleStep(step.id)">
@@ -653,7 +650,7 @@
             </div>
             </div>
           </div>
-          <div class="drop-gap" v-if="dragSrcIndex !== null && dropInsertIndex === pipelineSteps.length"></div>
+          <div class="drop-gap" v-if="shouldShowGap(pipelineSteps.length)"></div>
         <!-- Add step button — below last card -->
         <div class="add-step-wrap" v-if="parsedData !== null" style="flex:unset;">
           <button class="add-step-btn" @click="addStepDropdownOpen = !addStepDropdownOpen">
@@ -926,34 +923,45 @@ const app = createApp({
     // ── DRAG & DROP ──
     const dragSrcIndex    = ref(null);
     const dropInsertIndex = ref(null);
-    let _dragLeaveTimer = null;
 
     function onDragStart(si, e) {
-      dragSrcIndex.value = si;
+      dragSrcIndex.value    = si;
+      dropInsertIndex.value = si;
       e.dataTransfer.effectAllowed = 'move';
     }
-    function onDragOver(si, e) {
-      clearTimeout(_dragLeaveTimer);
+
+    function onContainerDragOver(e) {
       if (dragSrcIndex.value === null) return;
-      const rect = e.currentTarget.getBoundingClientRect();
-      dropInsertIndex.value = e.clientY < rect.top + rect.height / 2 ? si : si + 1;
+      const cards = Array.from(e.currentTarget.querySelectorAll('.pipeline-step-card'));
+      if (!cards.length) { dropInsertIndex.value = 0; return; }
+      let insertAt = cards.length;
+      for (let i = 0; i < cards.length; i++) {
+        const rect = cards[i].getBoundingClientRect();
+        if (e.clientY < rect.top + rect.height / 2) { insertAt = i; break; }
+      }
+      dropInsertIndex.value = insertAt;
     }
-    function onDragLeave() {
-      _dragLeaveTimer = setTimeout(() => { dropInsertIndex.value = null; }, 60);
+
+    function shouldShowGap(pos) {
+      return dragSrcIndex.value !== null
+        && dropInsertIndex.value === pos
+        && pos !== dragSrcIndex.value
+        && pos !== dragSrcIndex.value + 1;
     }
+
     function executeDrop() {
-      clearTimeout(_dragLeaveTimer);
       const from = dragSrcIndex.value;
       const to   = dropInsertIndex.value;
-      if (from === null || to === null) { onDragEnd(); return; }
-      const steps = pipelineSteps.value;
-      const moved = steps.splice(from, 1)[0];
-      steps.splice(to > from ? to - 1 : to, 0, moved);
+      if (from === null || to === null || from === to || from === to - 1) { onDragEnd(); return; }
+      const items = pipelineSteps.value.slice();
+      const [moved] = items.splice(from, 1);
+      items.splice(to > from ? to - 1 : to, 0, moved);
+      pipelineSteps.value   = items;
       dragSrcIndex.value    = null;
       dropInsertIndex.value = null;
     }
+
     function onDragEnd() {
-      clearTimeout(_dragLeaveTimer);
       dragSrcIndex.value    = null;
       dropInsertIndex.value = null;
     }
@@ -1343,7 +1351,7 @@ const app = createApp({
       parseJSON, triggerFileInput, onFileChange, onDrop, onTextareaInput, onToggle,
       addStep, removeStep, clearPipeline, toggleStep,
       addStepRule, removeStepRule,
-      dragSrcIndex, dropInsertIndex, onDragStart, onDragOver, onDragLeave, executeDrop, onDragEnd,
+      dragSrcIndex, dropInsertIndex, onDragStart, onContainerDragOver, shouldShowGap, executeDrop, onDragEnd,
       stepSummary, stepJq, selectColumnActive, toggleSelectColumn,
       parseColumns, applyPipeline,
     };
