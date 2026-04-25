@@ -40,6 +40,7 @@ export function usePipeline(parsedData) {
   const docOrder     = ref(null)        // number[] | null (null = natural order)
   const docEdits     = ref({})          // { [id]: { [field]: value } }
   const hiddenColumns = ref(new Set())  // field names hidden from viewer
+  const columnOrder   = ref(null)        // string[] | null — custom column order for output
 
   // Sort config: applied when docOrder is null
   const sortConfig   = ref(null)        // { field: string, dir: 'asc'|'desc' } | null
@@ -103,9 +104,20 @@ export function usePipeline(parsedData) {
     return Array.from(fieldSet)
   })
 
+  /** Columns in user's preferred order (custom if set, else natural). */
+  const orderedColumns = computed(() => {
+    if (columnOrder.value) {
+      const orderSet = new Set(columnOrder.value)
+      const existing = columnOrder.value.filter(f => availableFields.value.includes(f))
+      const added    = availableFields.value.filter(f => !orderSet.has(f))
+      return [...existing, ...added]
+    }
+    return availableFields.value
+  })
+
   /** Columns visible in the viewer (all available minus hidden). */
   const visibleColumns = computed(() => {
-    return availableFields.value.filter(f => !hiddenColumns.value.has(f))
+    return orderedColumns.value.filter(f => !hiddenColumns.value.has(f))
   })
 
   // ── Ordering ───────────────────────────────────────────────────────────────
@@ -380,6 +392,11 @@ export function usePipeline(parsedData) {
     hiddenColumns.value = new Set()
   }
 
+  // ── Column order ───────────────────────────────────────────────────────────
+
+  function setColumnOrder(order) { columnOrder.value = order }
+  function resetColumnOrder()    { columnOrder.value = null }
+
   // ── Sorting ────────────────────────────────────────────────────────────────
 
   function sortAllDocs(field, dir) {
@@ -524,6 +541,21 @@ export function usePipeline(parsedData) {
       docs = applyStepJs(step, docs)
     }
 
+    // Apply column order (lazy — only at output time)
+    if (columnOrder.value) {
+      const order = orderedColumns.value
+      docs = docs.map(doc => {
+        const out = {}
+        for (const key of order) {
+          if (key in doc) out[key] = doc[key]
+        }
+        for (const key of Object.keys(doc)) {
+          if (!(key in out)) out[key] = doc[key]
+        }
+        return out
+      })
+    }
+
     return docs
   }
 
@@ -532,11 +564,11 @@ export function usePipeline(parsedData) {
     arrayPath, pipelineSteps, activeStepId, pipelineEvalFlash,
     currentPage, totalPages, totalDocs, viewerSearch,
     excludedIds, selectedIds, docOrder, sortConfig,
-    hiddenColumns,
+    hiddenColumns, columnOrder,
 
     // Computed
     arrayPathSuggestions, baseDocuments, docTag,
-    availableFields, visibleColumns,
+    availableFields, orderedColumns, visibleColumns,
     orderedIds, pageDocs, pageDocIds, filterPassMap,
     pipelineStats, isLargeFile,
 
@@ -561,6 +593,9 @@ export function usePipeline(parsedData) {
 
     // Column visibility
     toggleColumnVisibility, showAllColumns,
+
+    // Column order
+    columnOrder, setColumnOrder, resetColumnOrder,
 
     // Sort / order
     sortAllDocs, resetOrder,

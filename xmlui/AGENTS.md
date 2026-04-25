@@ -8,11 +8,11 @@ Vue 3 + Vite app for interactive XML transformation. Three-column layout: input 
 - `npm run build:single` — single self-contained HTML via `vite-plugin-singlefile` (`vite.single.config.js`, output: `dist-single/`)
 - `@` alias → `src/`
 
-After any changes to files in `xmlui/`, always run:
+After any changes to files in `xmlui/`, always run both builds in order:
 ```
-cd xmlui && npm run build
+cd xmlui && npm run build && npm run build:single
 ```
-Verify the build exits with code 0 before considering the task complete.
+Verify both builds exit with code 0 before considering the task complete.
 
 ## Entry
 

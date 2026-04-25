@@ -80,17 +80,30 @@
       <section class="section" v-if="availableFields.length">
         <div class="section-title">
           Visible columns
-          <button v-if="hiddenColumns.size" class="btn-sm btn-ghost" @click="$emit('show-all-columns')">Show all</button>
+          <div style="display:flex;gap:4px;margin-left:auto">
+            <button v-if="columnOrderActive" class="btn-sm btn-ghost" @click="$emit('reset-column-order')" title="Reset column order">↺ Order</button>
+            <button v-if="hiddenColumns.size" class="btn-sm btn-ghost" @click="$emit('show-all-columns')">Show all</button>
+          </div>
         </div>
-        <div class="col-chips">
-          <button
-            v-for="f in availableFields"
-            :key="f"
-            class="col-chip"
-            :class="{ hidden: hiddenColumns.has(f) }"
-            @click="$emit('toggle-column-visibility', f)"
-            :title="hiddenColumns.has(f) ? 'Show ' + f : 'Hide ' + f"
-          >{{ f }}</button>
+        <div
+          class="col-chips"
+          @dragover.prevent="onColContainerDragOver"
+          @drop.prevent="onColDrop"
+          @dragleave="colDropIndex = null"
+        >
+          <template v-for="(f, i) in availableFields" :key="f">
+            <div class="col-drop-indicator" v-if="shouldShowColGap(i)"></div>
+            <button
+              class="col-chip"
+              :class="{ hidden: hiddenColumns.has(f), 'col-dragging': colDragSrc === i }"
+              draggable="true"
+              @dragstart="onColDragStart(i, $event)"
+              @dragend="onColDragEnd"
+              @click="$emit('toggle-column-visibility', f)"
+              :title="hiddenColumns.has(f) ? 'Show ' + f : 'Hide ' + f"
+            >☸ {{ f }}</button>
+          </template>
+          <div class="col-drop-indicator" v-if="shouldShowColGap(availableFields.length)"></div>
         </div>
       </section>
 
@@ -181,6 +194,7 @@ const props = defineProps({
   pipelineStats:     { type: Object,   default: null },
   sortConfig:        { type: Object,   default: null },
   hiddenColumns:     { type: Object,   default: () => new Set() }, // Set
+  columnOrderActive: { type: Boolean,  default: false },
   selectedCount:     { type: Number,   default: 0 },
   docOrderActive:    { type: Boolean,  default: false },
   stepDragSrcIndex:  { default: null },
@@ -198,6 +212,7 @@ const emit = defineEmits([
   'paste-key', 'toggle-column', 'add-rule', 'remove-rule',
   'sort-all', 'reset-order',
   'toggle-column-visibility', 'show-all-columns',
+  'reorder-columns', 'reset-column-order',
   'clear-exclusions', 'clear-selection', 'exclude-selected',
   'download',
 ])
@@ -215,6 +230,52 @@ function doSort() {
   if (localSortField.value) {
     emit('sort-all', localSortField.value, localSortDir.value)
   }
+}
+
+// ── Column chip drag-and-drop ─────────────────────────────────────────
+
+const colDragSrc   = ref(null)
+const colDropIndex = ref(null)
+
+function onColDragStart(i, e) {
+  colDragSrc.value = i
+  e.dataTransfer.effectAllowed = 'move'
+}
+
+function onColContainerDragOver(e) {
+  if (colDragSrc.value === null) return
+  const chips = Array.from(e.currentTarget.querySelectorAll('.col-chip'))
+  if (!chips.length) { colDropIndex.value = 0; return }
+  let insertAt = chips.length
+  for (let i = 0; i < chips.length; i++) {
+    const rect = chips[i].getBoundingClientRect()
+    if (e.clientX < rect.left + rect.width / 2) { insertAt = i; break }
+  }
+  colDropIndex.value = insertAt
+}
+
+function shouldShowColGap(pos) {
+  return colDragSrc.value !== null
+    && colDropIndex.value === pos
+    && pos !== colDragSrc.value
+    && pos !== colDragSrc.value + 1
+}
+
+function onColDrop() {
+  const from = colDragSrc.value
+  const to   = colDropIndex.value
+  colDragSrc.value = null
+  colDropIndex.value = null
+  if (from === null || to === null || from === to || from === to - 1) return
+  const cols = props.availableFields.slice()
+  const [moved] = cols.splice(from, 1)
+  cols.splice(to > from ? to - 1 : to, 0, moved)
+  emit('reorder-columns', cols)
+}
+
+function onColDragEnd() {
+  colDragSrc.value = null
+  colDropIndex.value = null
 }
 </script>
 
@@ -414,12 +475,23 @@ function doSort() {
   color: var(--attr-key);
   padding: 2px 8px;
   font-size: 0.72rem;
-  cursor: pointer;
+  cursor: grab;
   transition: all 0.1s;
   font-family: 'Fira Code', monospace;
+  user-select: none;
 }
 .col-chip:hover { border-color: var(--text); }
 .col-chip.hidden { opacity: 0.35; text-decoration: line-through; }
+.col-chip.col-dragging { opacity: 0.3; }
+
+.col-drop-indicator {
+  width: 2px;
+  min-height: 20px;
+  background: var(--accent);
+  border-radius: 1px;
+  flex-shrink: 0;
+  align-self: stretch;
+}
 
 /* Add step buttons */
 .add-step-row { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }

@@ -52,13 +52,14 @@
       :active-step-id="activeStepId"
       :array-path="arrayPath"
       :suggestions="arrayPathSuggestions"
-      :available-fields="availableFields"
+      :available-fields="orderedColumns"
       :pipeline-eval-flash="pipelineEvalFlash"
       :pipeline-stats="pipelineStats"
       :sort-config="sortConfig"
       :hidden-columns="hiddenColumns"
       :selected-count="selectedIds.size"
       :doc-order-active="docOrder !== null"
+      :column-order-active="columnOrder !== null"
       :step-drag-src-index="stepDragSrcIndex"
       :step-drop-insert-index="stepDropInsertIndex"
       :draggable-step-index="draggableStepIndex"
@@ -82,6 +83,8 @@
       @reset-order="resetOrder"
       @toggle-column-visibility="toggleColumnVisibility"
       @show-all-columns="showAllColumns"
+      @reorder-columns="setColumnOrder"
+      @reset-column-order="resetColumnOrder"
       @clear-exclusions="clearExclusions"
       @clear-selection="clearSelection"
       @exclude-selected="excludeSelected"
@@ -134,7 +137,7 @@ const {
   excludedIds, selectedIds, docOrder, sortConfig, hiddenColumns,
 
   arrayPathSuggestions, docTag,
-  availableFields, visibleColumns,
+  availableFields, orderedColumns, visibleColumns,
   pageDocs, pipelineStats, isLargeFile,
 
   addStep, removeStep, clearPipeline, toggleStep,
@@ -150,6 +153,8 @@ const {
   setDocEdit,
   toggleColumnVisibility, showAllColumns,
   sortAllDocs, resetOrder,
+
+  columnOrder, setColumnOrder, resetColumnOrder,
 
   docDragSrcIds, docDropInsertIndex, draggableDocId,
   onDocDragStart, onDocContainerDragOver, shouldShowDocGap,
