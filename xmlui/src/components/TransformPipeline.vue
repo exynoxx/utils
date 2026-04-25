@@ -57,6 +57,12 @@
         <div v-if="pipelineStats.excluded" class="stat-action">
           <button class="btn-sm btn-ghost" @click="$emit('clear-exclusions')">Clear exclusions</button>
         </div>
+        <div v-if="filterComputeProgress !== null" class="filter-progress">
+          <div class="filter-progress-bar">
+            <div class="filter-progress-fill" :style="{ width: filterComputeProgress + '%' }"></div>
+          </div>
+          <span class="filter-progress-text">Computing filters… {{ filterComputeProgress }}%</span>
+        </div>
       </section>
 
       <!-- Sort -->
@@ -198,6 +204,7 @@ const props = defineProps({
   columnOrderActive: { type: Boolean,  default: false },
   selectedCount:     { type: Number,   default: 0 },
   docOrderActive:    { type: Boolean,  default: false },
+  filterComputeProgress: { default: null },
   stepDragSrcIndex:  { default: null },
   stepDropInsertIndex: { default: null },
   draggableStepIndex: { default: null },
@@ -434,6 +441,25 @@ function onColDragEnd() {
 .stat-value.red    { color: var(--red); }
 .stat-value.yellow { color: var(--yellow); }
 .stat-action { margin-top: 4px; }
+
+/* Filter progress */
+.filter-progress { margin-top: 6px; }
+.filter-progress-bar {
+  height: 3px;
+  background: var(--surface3);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.filter-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.15s linear;
+}
+.filter-progress-text {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
 
 /* Sort */
 .sort-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }

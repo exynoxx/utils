@@ -82,8 +82,16 @@ export function useXmlFile() {
           fileMeta.value = { name: file.name, sizeMB: (file.size / 1048576).toFixed(2), truncated: false }
           rawInput.value = text
         }
-        parseXML()
-        loadProgress.value = null
+        if (isLarge) {
+          loadProgress.value = 'Parsing XML…'
+          setTimeout(() => {
+            parseXML()
+            loadProgress.value = null
+          }, 50)
+        } else {
+          parseXML()
+          loadProgress.value = null
+        }
       }, 30)
     }
     reader.onerror = () => {

@@ -1,5 +1,8 @@
-import { ref, computed, watch, onScopeDispose } from 'vue'
-import { DOCS_PER_PAGE, LARGE_FILE_ROWS, MAX_FIELD_SAMPLE } from '@/constants'
+﻿import { ref, shallowRef, computed, watch, onScopeDispose } from 'vue'
+import {
+  DOCS_PER_PAGE, LARGE_FILE_ROWS, MAX_FIELD_SAMPLE,
+  FILTER_CHUNK_SIZE, SEARCH_DEBOUNCE_MS, SEARCH_MIN_CHARS,
+} from '@/constants'
 import { getArrayPathSuggestions, evalXPath, elementToDoc } from '@/utils/xmlUtils'
 import { applyStepJs, stepSummaryText, parseColumns } from '@/utils/pipelineEval'
 
@@ -23,6 +26,10 @@ function newRule() {
  * All XML pipeline state: array path, pipeline steps, document ordering,
  * inline edits, exclusions, selection, and drag-and-drop for both
  * step reordering and document row reordering.
+ *
+ * PERFORMANCE: Documents are extracted lazily — only the 50 docs visible on
+ * the current page are materialised via elementToDoc(). A Map cache ensures
+ * each doc is materialised at most once until the data changes.
  */
 export function usePipeline(parsedData) {
   // ── Core pipeline state ────────────────────────────────────────────────────
@@ -34,16 +41,14 @@ export function usePipeline(parsedData) {
   const viewerSearch  = ref('')
 
   // ── Document state ─────────────────────────────────────────────────────────
-  const excludedIds  = ref(new Set())   // doc IDs excluded from output
-  const selectedIds  = ref(new Set())   // doc IDs selected in viewer
-  const lastSelectedId = ref(null)      // for shift+click range
-  const docOrder     = ref(null)        // number[] | null (null = natural order)
-  const docEdits     = ref({})          // { [id]: { [field]: value } }
-  const hiddenColumns = ref(new Set())  // field names hidden from viewer
-  const columnOrder   = ref(null)        // string[] | null — custom column order for output
-
-  // Sort config: applied when docOrder is null
-  const sortConfig   = ref(null)        // { field: string, dir: 'asc'|'desc' } | null
+  const excludedIds  = ref(new Set())
+  const selectedIds  = ref(new Set())
+  const lastSelectedId = ref(null)
+  const docOrder     = ref(null)
+  const docEdits     = ref({})
+  const hiddenColumns = ref(new Set())
+  const columnOrder   = ref(null)
+  const sortConfig   = ref(null)
 
   // ── Step drag state ────────────────────────────────────────────────────────
   const stepDragSrcIndex    = ref(null)
@@ -55,26 +60,50 @@ export function usePipeline(parsedData) {
   const docDropInsertIndex = ref(null)
   const draggableDocId     = ref(null)
 
+  // ── Async filter state ─────────────────────────────────────────────────────
+  const filterPassMap        = shallowRef({})
+  const filterComputeProgress = ref(null)   // null | 0-100
+  let _filterCancelToken     = 0
+
   let _evalFlashTimer   = null
   let _debounceTimer    = null
+  let _searchTimer      = null
 
   onScopeDispose(() => {
     clearTimeout(_evalFlashTimer)
     clearTimeout(_debounceTimer)
+    clearTimeout(_searchTimer)
+    ++_filterCancelToken
   })
 
-  // ── Base document extraction ───────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PHASE 1 — Lazy Document Extraction
+  // ═══════════════════════════════════════════════════════════════════════════
 
-  /**
-   * The raw documents extracted from the parsed XML tree using arrayPath.
-   * Each doc gets a stable _id integer.
-   */
-  const baseDocuments = computed(() => {
+  /** Lightweight element references from evalXPath (no doc materialisation). */
+  const baseElements = computed(() => {
     const ap = arrayPath.value.trim()
     if (!ap || !parsedData.value) return []
-    const elements = evalXPath(parsedData.value, ap)
-    return elements.map((el, i) => ({ _id: i, ...elementToDoc(el) }))
+    return evalXPath(parsedData.value, ap)
   })
+
+  const docCount = computed(() => baseElements.value.length)
+
+  /** Whether dataset is large enough to gate expensive ops. */
+  const isLargeFile = computed(() => docCount.value > LARGE_FILE_ROWS)
+
+  // ── Doc cache ──────────────────────────────────────────────────────────────
+  let _docCache = new Map()
+
+  /** Lazily materialise a doc by ID (with cache). */
+  function getDoc(id) {
+    if (_docCache.has(id)) return _docCache.get(id)
+    const el = baseElements.value[id]
+    if (!el) return null
+    const doc = { _id: id, ...elementToDoc(el) }
+    _docCache.set(id, doc)
+    return doc
+  }
 
   /** The last segment of arrayPath — used as the XML element tag for output. */
   const docTag = computed(() => {
@@ -84,19 +113,16 @@ export function usePipeline(parsedData) {
     return segs[segs.length - 1] || 'item'
   })
 
-  /** Whether dataset is large enough to skip live preview. */
-  const isLargeFile = computed(() => baseDocuments.value.length > LARGE_FILE_ROWS)
-
   // ── Array path suggestions ─────────────────────────────────────────────────
-
   const arrayPathSuggestions = computed(() => getArrayPathSuggestions(parsedData.value))
 
   // ── Available fields ───────────────────────────────────────────────────────
-
   const availableFields = computed(() => {
-    const docs = baseDocuments.value.slice(0, MAX_FIELD_SAMPLE)
+    const n = Math.min(docCount.value, MAX_FIELD_SAMPLE)
     const fieldSet = new Set()
-    for (const doc of docs) {
+    for (let i = 0; i < n; i++) {
+      const doc = getDoc(i)
+      if (!doc) continue
       for (const key of Object.keys(doc)) {
         if (key !== '_id') fieldSet.add(key)
       }
@@ -124,23 +150,23 @@ export function usePipeline(parsedData) {
 
   /** Doc IDs in their current display order. */
   const orderedIds = computed(() => {
-    const docs = baseDocuments.value
-    if (!docs.length) return []
+    const n = docCount.value
+    if (!n) return []
 
-    let ids = docs.map(d => d._id)
+    // Default: 0, 1, 2, … n-1  (no doc access needed)
+    let ids = Array.from({ length: n }, (_, i) => i)
 
     if (docOrder.value) {
-      // Use custom order, ensuring we include any new IDs not yet in order
+      const idSet = new Set(ids)
       const orderSet = new Set(docOrder.value)
-      const existing = docOrder.value.filter(id => ids.includes(id))
+      const existing = docOrder.value.filter(id => idSet.has(id))
       const added    = ids.filter(id => !orderSet.has(id))
       ids = [...existing, ...added]
     } else if (sortConfig.value) {
       const { field, dir } = sortConfig.value
-      const docMap = Object.fromEntries(docs.map(d => [d._id, d]))
       ids = ids.slice().sort((a, b) => {
-        const va = docMap[a]?.[field] ?? ''
-        const vb = docMap[b]?.[field] ?? ''
+        const va = getDoc(a)?.[field] ?? ''
+        const vb = getDoc(b)?.[field] ?? ''
         const cmp = String(va).localeCompare(String(vb), undefined, { numeric: true })
         return dir === 'asc' ? cmp : -cmp
       })
@@ -152,44 +178,129 @@ export function usePipeline(parsedData) {
   // ── Docs with edits applied ────────────────────────────────────────────────
 
   function applyEdits(doc) {
+    if (!doc) return doc
     const edits = docEdits.value[doc._id]
     return edits ? { ...doc, ...edits } : doc
   }
 
-  // ── Filter pass map (which docs pass all filter steps) ────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PHASE 2 — Async Chunked Filter
+  // ═══════════════════════════════════════════════════════════════════════════
 
-  const filterPassMap = computed(() => {
+  /** Pre-compile filter functions once per condition string. */
+  function _compileFilterFns() {
     const filterSteps = pipelineSteps.value.filter(s => s.type === 'filter')
-    const passMap = {}
-    for (const doc of baseDocuments.value) {
-      const d = applyEdits(doc)
-      let pass = true
-      for (const step of filterSteps) {
-        const cond = (step.condition || '').trim()
-        if (!cond) continue
-        try {
-          const prepared = cond
-            .replace(/^\./g, 'doc.')
-            .replace(/(?<![a-zA-Z0-9_$\]])\./g, 'doc.')
-          // eslint-disable-next-line no-new-func
-          const fn = new Function('doc', 'item', 'with(item){ return !!((' + prepared + ')) }')
-          if (!fn(d, d)) { pass = false; break }
-        } catch { pass = false; break }
+    const fns = []
+    for (const step of filterSteps) {
+      const cond = (step.condition || '').trim()
+      if (!cond) continue
+      try {
+        const prepared = cond
+          .replace(/^\./g, 'doc.')
+          .replace(/(?<![a-zA-Z0-9_$\]])\./g, 'doc.')
+        // eslint-disable-next-line no-new-func
+        fns.push(new Function('doc', 'item', 'with(item){ return !!((' + prepared + ')) }'))
+      } catch {
+        // if compilation fails, push a function that always returns false
+        fns.push(() => false)
       }
-      passMap[doc._id] = pass
     }
-    return passMap
+    return fns
+  }
+
+  function _evalDocFilter(doc, fns) {
+    const d = applyEdits(doc)
+    for (const fn of fns) {
+      try { if (!fn(d, d)) return false } catch { return false }
+    }
+    return true
+  }
+
+  function _runFilterComputation() {
+    const token = ++_filterCancelToken
+    const n = docCount.value
+    const fns = _compileFilterFns()
+
+    // No filter steps → all pass
+    if (!fns.length) {
+      filterPassMap.value = {}
+      filterComputeProgress.value = null
+      return
+    }
+
+    // Small files → synchronous
+    if (n <= LARGE_FILE_ROWS) {
+      const passMap = {}
+      for (let i = 0; i < n; i++) {
+        passMap[i] = _evalDocFilter(getDoc(i), fns)
+      }
+      filterPassMap.value = passMap
+      filterComputeProgress.value = null
+      return
+    }
+
+    // Large files → chunked async
+    filterComputeProgress.value = 0
+    const passMap = {}
+    let cursor = 0
+
+    function processChunk() {
+      if (token !== _filterCancelToken) return  // stale
+      const end = Math.min(cursor + FILTER_CHUNK_SIZE, n)
+      for (let i = cursor; i < end; i++) {
+        passMap[i] = _evalDocFilter(getDoc(i), fns)
+      }
+      cursor = end
+      filterComputeProgress.value = Math.round((cursor / n) * 100)
+      if (cursor < n) {
+        setTimeout(processChunk, 0)
+      } else {
+        filterPassMap.value = passMap
+        filterComputeProgress.value = null
+      }
+    }
+
+    processChunk()
+  }
+
+  // Trigger filter recomputation when steps or data change
+  watch(
+    [() => pipelineSteps.value.filter(s => s.type === 'filter').map(s => s.condition).join('\0'), docCount],
+    () => { _runFilterComputation() },
+    { immediate: true }
+  )
+
+  // Also recompute when docEdits change (edits affect filter results)
+  watch(docEdits, () => { _runFilterComputation() }, { deep: true })
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PHASE 3 — Debounced Search
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const _debouncedSearch = ref('')
+
+  watch(viewerSearch, (q) => {
+    clearTimeout(_searchTimer)
+    const trimmed = q.trim()
+    if (!trimmed) {
+      _debouncedSearch.value = ''
+      return
+    }
+    _searchTimer = setTimeout(() => {
+      _debouncedSearch.value = trimmed
+    }, SEARCH_DEBOUNCE_MS)
   })
 
-  // ── Current page docs ──────────────────────────────────────────────────────
-
   const filteredIds = computed(() => {
-    const q = viewerSearch.value.trim().toLowerCase()
-    if (!q) return orderedIds.value
+    const q = _debouncedSearch.value.toLowerCase()
 
-    const docMap = Object.fromEntries(baseDocuments.value.map(d => [d._id, d]))
+    // For large files, require minimum search chars
+    if (!q || (isLargeFile.value && q.length < SEARCH_MIN_CHARS)) {
+      return orderedIds.value
+    }
+
     return orderedIds.value.filter(id => {
-      const doc = docMap[id]
+      const doc = getDoc(id)
       if (!doc) return false
       const editsDoc = applyEdits(doc)
       return Object.values(editsDoc).some(v =>
@@ -197,6 +308,8 @@ export function usePipeline(parsedData) {
       )
     })
   })
+
+  // ── Current page docs ──────────────────────────────────────────────────────
 
   const totalDocs  = computed(() => filteredIds.value.length)
   const totalPages = computed(() => Math.max(1, Math.ceil(totalDocs.value / DOCS_PER_PAGE)))
@@ -208,10 +321,9 @@ export function usePipeline(parsedData) {
 
   /** Enriched page documents with view-layer metadata. */
   const pageDocs = computed(() => {
-    const docMap = Object.fromEntries(baseDocuments.value.map(d => [d._id, d]))
     const passMap = filterPassMap.value
     return pageDocIds.value.map(id => {
-      const doc = docMap[id]
+      const doc = getDoc(id)
       if (!doc) return null
       const withEdits = applyEdits(doc)
       return {
@@ -227,9 +339,11 @@ export function usePipeline(parsedData) {
   // ── Pipeline stats ─────────────────────────────────────────────────────────
 
   const pipelineStats = computed(() => {
-    const total    = baseDocuments.value.length
+    const total    = docCount.value
     const excluded = excludedIds.value.size
-    const filtered = Object.values(filterPassMap.value).filter(Boolean).length
+    const passMap  = filterPassMap.value
+    const passKeys = Object.keys(passMap)
+    const filtered = passKeys.length ? passKeys.filter(k => passMap[k]).length : total
     const selected = selectedIds.value.size
     return { total, filtered, excluded, selected }
   })
@@ -255,7 +369,8 @@ export function usePipeline(parsedData) {
   }
 
   // Reset pagination and order when data changes
-  watch(baseDocuments, () => {
+  watch(baseElements, () => {
+    _docCache = new Map()
     currentPage.value = 1
     docOrder.value = null
     docEdits.value = {}
@@ -336,7 +451,6 @@ export function usePipeline(parsedData) {
     const s = new Set(selectedIds.value)
 
     if (event && event.shiftKey && lastSelectedId.value != null) {
-      // Range select between lastSelectedId and id
       const ids = filteredIds.value
       const a = ids.indexOf(lastSelectedId.value)
       const b = ids.indexOf(id)
@@ -348,7 +462,6 @@ export function usePipeline(parsedData) {
       if (s.has(id)) s.delete(id)
       else s.add(id)
     } else {
-      // Simple toggle without modifier
       if (s.has(id)) s.delete(id)
       else s.add(id)
     }
@@ -404,7 +517,6 @@ export function usePipeline(parsedData) {
     sortConfig.value = { field, dir }
     docOrder.value = null
     currentPage.value = 1
-    // Add or update a sort step in the pipeline for visibility
     const existing = pipelineSteps.value.find(s => s.type === 'sort')
     if (existing) {
       existing.field = field
@@ -474,7 +586,6 @@ export function usePipeline(parsedData) {
   // ── Doc row drag-and-drop ──────────────────────────────────────────────────
 
   function onDocDragStart(docId, event) {
-    // Drag all selected docs if the dragged doc is among them; else just this one
     if (selectedIds.value.has(docId)) {
       docDragSrcIds.value = [...selectedIds.value]
     } else {
@@ -503,7 +614,6 @@ export function usePipeline(parsedData) {
     const insertAt = docDropInsertIndex.value
     if (!srcIds.length || insertAt === null) { _clearDocDrag(); return }
 
-    // Convert page-relative insert index to absolute in orderedIds
     const pageStart    = (currentPage.value - 1) * DOCS_PER_PAGE
     const absoluteInsert = pageStart + insertAt
 
@@ -528,25 +638,22 @@ export function usePipeline(parsedData) {
 
   /**
    * Build the final processed document array for XML output.
-   * Applies: edits → exclusions → order → pipeline steps.
-   * Strips the internal _id field.
+   * Uses getDoc() for lazy materialisation with cache.
    */
   function getOutputDocs() {
-    if (!baseDocuments.value.length) return null
+    if (!docCount.value) return null
 
-    // Apply inline edits
-    let docs = baseDocuments.value.map(doc => applyEdits(doc))
-
-    // Apply custom order
     const order = orderedIds.value
-    const docMap = Object.fromEntries(docs.map(d => [d._id, d]))
-    docs = order.map(id => docMap[id]).filter(Boolean)
 
-    // Remove excluded docs
-    docs = docs.filter(d => !excludedIds.value.has(d._id))
-
-    // Strip internal _id
-    docs = docs.map(({ _id, ...rest }) => rest)
+    // Build docs in order, applying edits, skipping excluded
+    let docs = []
+    for (const id of order) {
+      if (excludedIds.value.has(id)) continue
+      const doc = getDoc(id)
+      if (!doc) continue
+      const { _id, ...rest } = applyEdits(doc)
+      docs.push(rest)
+    }
 
     // Apply pipeline steps
     for (const step of pipelineSteps.value) {
@@ -555,10 +662,10 @@ export function usePipeline(parsedData) {
 
     // Apply column order (lazy — only at output time)
     if (columnOrder.value) {
-      const order = orderedColumns.value
+      const colOrder = orderedColumns.value
       docs = docs.map(doc => {
         const out = {}
-        for (const key of order) {
+        for (const key of colOrder) {
           if (key in doc) out[key] = doc[key]
         }
         for (const key of Object.keys(doc)) {
@@ -590,10 +697,11 @@ export function usePipeline(parsedData) {
     hiddenColumns, columnOrder,
 
     // Computed
-    arrayPathSuggestions, baseDocuments, docTag,
+    arrayPathSuggestions, docTag,
     availableFields, orderedColumns, visibleColumns,
     orderedIds, pageDocs, pageDocIds, filterPassMap,
     pipelineStats, isLargeFile,
+    filterComputeProgress,
 
     // Step ops
     addStep, removeStep, clearPipeline, toggleStep,

@@ -66,6 +66,7 @@
         :hidden-columns="hiddenColumns"
         :selected-count="selectedIds.size"
         :doc-order-active="docOrder !== null"
+        :filter-compute-progress="filterComputeProgress"
         :column-order-active="columnOrder !== null"
         :step-drag-src-index="stepDragSrcIndex"
         :step-drop-insert-index="stepDropInsertIndex"
@@ -147,6 +148,7 @@ const {
   arrayPathSuggestions, docTag,
   availableFields, orderedColumns, visibleColumns,
   pageDocs, pipelineStats, isLargeFile,
+  filterComputeProgress,
 
   addStep, removeStep, clearPipeline, toggleStep,
   addMapRule, removeMapRule, pasteFilterKey,

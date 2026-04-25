@@ -28,7 +28,12 @@
 
     <!-- Load progress -->
     <div v-if="loadProgress !== null" class="load-progress">
-      <div class="load-progress-fill" :style="{ width: loadProgress + '%' }"></div>
+      <template v-if="typeof loadProgress === 'string'">
+        <div class="load-status-text">{{ loadProgress }}</div>
+      </template>
+      <template v-else>
+        <div class="load-progress-fill" :style="{ width: loadProgress + '%' }"></div>
+      </template>
     </div>
 
     <!-- Parse error -->
@@ -159,16 +164,27 @@ function handleTextareaInput(e) {
 .truncated-badge { color: var(--yellow); }
 
 .load-progress {
-  height: 3px;
+  min-height: 3px;
   background: var(--surface3);
   margin: 6px 16px 0;
   border-radius: 2px;
   overflow: hidden;
 }
 .load-progress-fill {
-  height: 100%;
+  height: 3px;
   background: var(--accent);
   transition: width 0.1s linear;
+}
+.load-status-text {
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  color: var(--accent);
+  text-align: center;
+  animation: pulse-text 1.2s ease-in-out infinite;
+}
+@keyframes pulse-text {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 .parse-error {
