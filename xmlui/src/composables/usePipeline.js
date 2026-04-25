@@ -275,6 +275,7 @@ export function usePipeline(parsedData) {
     if (type === 'filter') step.condition = ''
     if (type === 'select') { step.columnsRaw = '' }
     if (type === 'map')    step.rules = [newRule()]
+    if (type === 'sort')   { step.field = ''; step.dir = 'asc' }
     pipelineSteps.value.push(step)
     activeStepId.value = step.id
   }
@@ -403,11 +404,22 @@ export function usePipeline(parsedData) {
     sortConfig.value = { field, dir }
     docOrder.value = null
     currentPage.value = 1
+    // Add or update a sort step in the pipeline for visibility
+    const existing = pipelineSteps.value.find(s => s.type === 'sort')
+    if (existing) {
+      existing.field = field
+      existing.dir   = dir
+    } else {
+      const step = { id: ++stepIdCounter, type: 'sort', field, dir }
+      pipelineSteps.value.push(step)
+      activeStepId.value = step.id
+    }
   }
 
   function resetOrder() {
     docOrder.value = null
     sortConfig.value = null
+    pipelineSteps.value = pipelineSteps.value.filter(s => s.type !== 'sort')
     currentPage.value = 1
   }
 
@@ -551,6 +563,17 @@ export function usePipeline(parsedData) {
         }
         for (const key of Object.keys(doc)) {
           if (!(key in out)) out[key] = doc[key]
+        }
+        return out
+      })
+    }
+
+    // Apply hidden columns (lazy — only at output time)
+    if (hiddenColumns.value.size) {
+      docs = docs.map(doc => {
+        const out = {}
+        for (const key of Object.keys(doc)) {
+          if (!hiddenColumns.value.has(key)) out[key] = doc[key]
         }
         return out
       })

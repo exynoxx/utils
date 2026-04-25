@@ -46,50 +46,57 @@
     />
 
     <!-- RIGHT: Transform Pipeline -->
-    <TransformPipeline
-      :parsed-data="parsedData"
-      :pipeline-steps="pipelineSteps"
-      :active-step-id="activeStepId"
-      :array-path="arrayPath"
-      :suggestions="arrayPathSuggestions"
-      :available-fields="orderedColumns"
-      :pipeline-eval-flash="pipelineEvalFlash"
-      :pipeline-stats="pipelineStats"
-      :sort-config="sortConfig"
-      :hidden-columns="hiddenColumns"
-      :selected-count="selectedIds.size"
-      :doc-order-active="docOrder !== null"
-      :column-order-active="columnOrder !== null"
-      :step-drag-src-index="stepDragSrcIndex"
-      :step-drop-insert-index="stepDropInsertIndex"
-      :draggable-step-index="draggableStepIndex"
-      :step-summary="stepSummary"
-      :should-show-step-gap="shouldShowStepGap"
-      @update:arrayPath="arrayPath = $event"
-      @add-step="addStep"
-      @remove-step="removeStep"
-      @clear="clearPipeline"
-      @toggle-step="toggleStep"
-      @drag-start="(si, e) => onStepDragStart(si, e)"
-      @drag-end="onStepDragEnd"
-      @set-draggable="(si, v) => { draggableStepIndex = v ? si : null }"
-      @container-dragover="onStepContainerDragOver"
-      @execute-drop="executeStepDrop"
-      @paste-key="pasteFilterKey"
-      @toggle-column="toggleSelectColumn"
-      @add-rule="addMapRule"
-      @remove-rule="removeMapRule"
-      @sort-all="sortAllDocs"
-      @reset-order="resetOrder"
-      @toggle-column-visibility="toggleColumnVisibility"
-      @show-all-columns="showAllColumns"
-      @reorder-columns="setColumnOrder"
-      @reset-column-order="resetColumnOrder"
-      @clear-exclusions="clearExclusions"
-      @clear-selection="clearSelection"
-      @exclude-selected="excludeSelected"
-      @download="downloadOutput"
-    />
+    <div class="pipeline-wrapper" :style="{ width: pipelineWidth + 'px' }">
+      <div
+        class="resize-handle"
+        :class="{ resizing: isResizingPipeline }"
+        @mousedown.prevent="onPipelineResizeStart"
+      ></div>
+      <TransformPipeline
+        :parsed-data="parsedData"
+        :pipeline-steps="pipelineSteps"
+        :active-step-id="activeStepId"
+        :array-path="arrayPath"
+        :suggestions="arrayPathSuggestions"
+        :available-fields="orderedColumns"
+        :pipeline-eval-flash="pipelineEvalFlash"
+        :pipeline-stats="pipelineStats"
+        :sort-config="sortConfig"
+        :hidden-columns="hiddenColumns"
+        :selected-count="selectedIds.size"
+        :doc-order-active="docOrder !== null"
+        :column-order-active="columnOrder !== null"
+        :step-drag-src-index="stepDragSrcIndex"
+        :step-drop-insert-index="stepDropInsertIndex"
+        :draggable-step-index="draggableStepIndex"
+        :step-summary="stepSummary"
+        :should-show-step-gap="shouldShowStepGap"
+        @update:arrayPath="arrayPath = $event"
+        @add-step="addStep"
+        @remove-step="removeStep"
+        @clear="clearPipeline"
+        @toggle-step="toggleStep"
+        @drag-start="(si, e) => onStepDragStart(si, e)"
+        @drag-end="onStepDragEnd"
+        @set-draggable="(si, v) => { draggableStepIndex = v ? si : null }"
+        @container-dragover="onStepContainerDragOver"
+        @execute-drop="executeStepDrop"
+        @paste-key="pasteFilterKey"
+        @toggle-column="toggleSelectColumn"
+        @add-rule="addMapRule"
+        @remove-rule="removeMapRule"
+        @sort-all="sortAllDocs"
+        @reset-order="resetOrder"
+        @toggle-column-visibility="toggleColumnVisibility"
+        @show-all-columns="showAllColumns"
+        @reorder-columns="setColumnOrder"
+        @reset-column-order="resetColumnOrder"
+        @clear-exclusions="clearExclusions"
+        @clear-selection="clearSelection"
+        @exclude-selected="excludeSelected"
+        @download="downloadOutput"
+      />
+    </div>
   </div>
 
   <!-- Hidden file input -->
@@ -235,6 +242,28 @@ function _onKeydown(e) {
 }
 onMounted(() => document.addEventListener('keydown', _onKeydown))
 onUnmounted(() => document.removeEventListener('keydown', _onKeydown))
+
+// ── Resizable pipeline panel ──────────────────────────────────────────────────
+const pipelineWidth      = ref(380)
+const isResizingPipeline = ref(false)
+
+function onPipelineResizeStart(e) {
+  isResizingPipeline.value = true
+  const startX     = e.clientX
+  const startWidth = pipelineWidth.value
+
+  function onMove(ev) {
+    const delta = startX - ev.clientX   // drag left → wider
+    pipelineWidth.value = Math.max(220, Math.min(700, startWidth + delta))
+  }
+  function onUp() {
+    isResizingPipeline.value = false
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
 </script>
 
 <style scoped>
@@ -243,6 +272,27 @@ onUnmounted(() => document.removeEventListener('keydown', _onKeydown))
   flex: 1;
   overflow: hidden;
   height: calc(100vh - 53px);
+}
+
+.pipeline-wrapper {
+  display: flex;
+  flex-direction: row;
+  flex-shrink: 0;
+  min-width: 220px;
+  max-width: 700px;
+  overflow: hidden;
+}
+
+.resize-handle {
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.resize-handle:hover,
+.resize-handle.resizing {
+  background: var(--accent);
 }
 
 .toast {

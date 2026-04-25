@@ -1,6 +1,6 @@
 <template>
   <div class="step-card pipeline-step-card"
-       :class="{ 'is-src': isDraggingSource, 'is-filter': step.type === 'filter', 'is-select': step.type === 'select', 'is-map': step.type === 'map' }"
+       :class="{ 'is-src': isDraggingSource, 'is-filter': step.type === 'filter', 'is-select': step.type === 'select', 'is-map': step.type === 'map', 'is-sort': step.type === 'sort' }"
        :draggable="isDraggable"
        @dragstart="$emit('drag-start', $event)"
        @dragend="$emit('drag-end')"
@@ -146,6 +146,22 @@
           >{{ key }}</button>
         </div>
       </template>
+
+      <!-- SORT step -->
+      <template v-if="step.type === 'sort'">
+        <div class="field-group">
+          <label class="field-label">Sort by field</label>
+          <div class="sort-step-row">
+            <select class="select-input flex1" v-model="step.field">
+              <option value="">— field —</option>
+              <option v-for="f in availableFields" :key="f" :value="f">{{ f }}</option>
+            </select>
+            <button class="dir-btn" @click="step.dir = step.dir === 'asc' ? 'desc' : 'asc'">
+              {{ step.dir === 'asc' ? '↑ Asc' : '↓ Desc' }}
+            </button>
+          </div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -186,6 +202,7 @@ function isColSelected(key) {
 .step-card.is-filter { border-left: 3px solid var(--accent); }
 .step-card.is-select { border-left: 3px solid var(--green); }
 .step-card.is-map    { border-left: 3px solid var(--yellow); }
+.step-card.is-sort   { border-left: 3px solid var(--attr-key); }
 
 .step-header {
   display: flex;
@@ -218,6 +235,7 @@ function isColSelected(key) {
 .type-badge.filter { background: rgba(247,137,106,0.2); color: var(--accent); }
 .type-badge.select { background: var(--green-dim); color: var(--green); }
 .type-badge.map    { background: var(--yellow-dim); color: var(--yellow); }
+.type-badge.sort   { background: rgba(147,197,253,0.15); color: var(--attr-key); }
 
 .step-summary {
   flex: 1;
@@ -397,4 +415,33 @@ function isColSelected(key) {
   font-family: 'Fira Code', monospace;
 }
 .chip:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Sort step */
+.sort-step-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.select-input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font-size: 0.78rem;
+  outline: none;
+}
+.select-input.flex1 { flex: 1; }
+.dir-btn {
+  background: var(--surface3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+.dir-btn:hover { background: var(--surface2); }
 </style>

@@ -119,6 +119,7 @@
           <button class="btn-step filter" @click="$emit('add-step', 'filter')">+ Filter</button>
           <button class="btn-step select" @click="$emit('add-step', 'select')">+ Select columns</button>
           <button class="btn-step map"    @click="$emit('add-step', 'map')">+ Map fields</button>
+          <button class="btn-step sort"   @click="$emit('add-step', 'sort')">+ Sort</button>
         </div>
 
         <!-- Steps list (draggable) -->
@@ -281,8 +282,8 @@ function onColDragEnd() {
 
 <style scoped>
 .pipeline-panel {
-  width: 380px;
-  min-width: 300px;
+  width: 100%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -510,6 +511,7 @@ function onColDragEnd() {
 .btn-step.filter { background: rgba(247,137,106,0.2); color: var(--accent); }
 .btn-step.select { background: var(--green-dim); color: var(--green); }
 .btn-step.map    { background: var(--yellow-dim); color: var(--yellow); }
+.btn-step.sort   { background: rgba(147,197,253,0.15); color: var(--attr-key); }
 .btn-step:hover { opacity: 0.8; }
 
 /* Steps list */

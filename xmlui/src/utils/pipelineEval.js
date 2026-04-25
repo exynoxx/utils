@@ -126,6 +126,18 @@ export function applyStepJs(step, docs) {
     })
   }
 
+  if (step.type === 'sort') {
+    const field = (step.field || '').trim()
+    const dir   = step.dir || 'asc'
+    if (!field) return docs
+    return docs.slice().sort((a, b) => {
+      const va = a[field] ?? ''
+      const vb = b[field] ?? ''
+      const cmp = String(va).localeCompare(String(vb), undefined, { numeric: true })
+      return dir === 'asc' ? cmp : -cmp
+    })
+  }
+
   return docs
 }
 
@@ -153,6 +165,11 @@ export function stepSummaryText(step) {
     if (rule.type === 'rename') return 'rename ' + col
     if (rule.type === 'conditional') return 'if … → ' + col
     return 'set ' + col
+  }
+  if (step.type === 'sort') {
+    const f = (step.field || '').trim()
+    if (!f) return ''
+    return f + (step.dir === 'desc' ? ' ↓' : ' ↑')
   }
   return ''
 }
