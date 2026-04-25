@@ -43,6 +43,7 @@
       @page-change="onPageChange"
       @sort-by="onSortBy"
       @hide-column="toggleColumnVisibility"
+      @reorder-columns="setColumnOrder"
     />
 
     <!-- RIGHT: Transform Pipeline -->

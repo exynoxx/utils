@@ -31,11 +31,23 @@
             </th>
             <th class="col-drag"></th>
             <th
-              v-for="col in columns"
+              v-for="(col, ci) in columns"
               :key="col"
               class="col-field"
+              :class="{
+                'col-drag-src': colDragSrc === ci,
+                'col-drop-before': shouldShowColDropBefore(ci),
+                'col-drop-after':  shouldShowColDropAfter(ci),
+              }"
+              draggable="true"
+              @dragstart="onColHeaderDragStart(ci, $event)"
+              @dragend="onColHeaderDragEnd"
+              @dragover.prevent="onColHeaderDragOver(ci, $event)"
+              @dragleave="onColHeaderDragLeave"
+              @drop.prevent="onColHeaderDrop"
             >
-              <span class="col-name" @click="$emit('sort-by', col)" :title="'Sort by ' + col">
+              <span class="col-drag-icon" title="Drag to reorder">⠿</span>
+              <span class="col-name" @click.stop="$emit('sort-by', col)" :title="'Sort by ' + col">
                 {{ col }}
                 <span v-if="sortField === col" class="sort-arrow">{{ sortDir === 'asc' ? '↑' : '↓' }}</span>
               </span>
@@ -170,7 +182,7 @@ const emit = defineEmits([
   'doc-drag-start', 'doc-drag-end',
   'container-dragover', 'execute-drop',
   'page-change', 'sort-by', 'hide-column',
-  'update:searchQuery',
+  'update:searchQuery', 'reorder-columns',
 ])
 
 const tableRef    = ref(null)
@@ -205,6 +217,58 @@ function cancelEdit() {
 const allPageSelected = computed(() =>
   props.docs.length > 0 && props.docs.every(d => d._selected)
 )
+
+// ── Column header drag-and-drop ────────────────────────────────────────────────
+const colDragSrc   = ref(null)   // index into props.columns
+const colDropIndex = ref(null)   // insertion point (0..columns.length)
+
+function onColHeaderDragStart(ci, e) {
+  colDragSrc.value = ci
+  e.dataTransfer.effectAllowed = 'move'
+}
+
+function onColHeaderDragEnd() {
+  colDragSrc.value   = null
+  colDropIndex.value = null
+}
+
+function onColHeaderDragLeave() {
+  // only clear if leaving the entire thead — handled by dragend
+}
+
+function onColHeaderDragOver(ci, e) {
+  if (colDragSrc.value === null) return
+  const rect = e.currentTarget.getBoundingClientRect()
+  colDropIndex.value = e.clientX < rect.left + rect.width / 2 ? ci : ci + 1
+}
+
+function shouldShowColDropBefore(ci) {
+  if (colDragSrc.value === null || colDropIndex.value === null) return false
+  return colDropIndex.value === ci
+    && ci !== colDragSrc.value
+    && ci !== colDragSrc.value + 1
+}
+
+function shouldShowColDropAfter(ci) {
+  // show a right-side indicator when dropping after the last column
+  const n = props.columns.length
+  return colDragSrc.value !== null
+    && colDropIndex.value === n
+    && ci === n - 1
+    && colDragSrc.value !== n - 1
+}
+
+function onColHeaderDrop() {
+  const from = colDragSrc.value
+  const to   = colDropIndex.value
+  colDragSrc.value   = null
+  colDropIndex.value = null
+  if (from === null || to === null || from === to || from === to - 1) return
+  const cols = props.columns.slice()
+  const [moved] = cols.splice(from, 1)
+  cols.splice(to > from ? to - 1 : to, 0, moved)
+  emit('reorder-columns', cols)
+}
 </script>
 
 <style scoped>
@@ -310,6 +374,24 @@ const allPageSelected = computed(() =>
 .col-name:hover { color: var(--text); }
 
 .sort-arrow { color: var(--accent); font-size: 0.8em; }
+
+/* Column header drag */
+.col-field { cursor: default; }
+.col-drag-icon {
+  cursor: grab;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  display: inline-block;
+  margin-right: 4px;
+  vertical-align: middle;
+  user-select: none;
+  opacity: 0.5;
+}
+.col-field:hover .col-drag-icon { opacity: 1; color: var(--text); }
+.col-field.col-drag-src { opacity: 0.35; }
+.col-field.col-drop-before { box-shadow: inset 3px 0 0 var(--accent); }
+.col-field.col-drop-after  { box-shadow: inset -3px 0 0 var(--accent); }
 
 .col-hide-btn {
   background: none;
