@@ -1,0 +1,514 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>p2p</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+/* â”€â”€ topbar â”€â”€ */
+#topbar{height:42px;background:#161b22;border-bottom:1px solid #21262d;display:flex;align-items:center;padding:0 14px;gap:10px;flex-shrink:0}
+.badge{font-size:11px;padding:2px 8px;border-radius:10px;font-weight:700}
+.badge-self{background:#1f3a5f;color:#79c0ff}
+.badge-crypto{background:#1a3a22;color:#3fb950}
+#status-dot{width:8px;height:8px;border-radius:50%;background:#3fb950;flex-shrink:0;transition:background .3s}
+#status-dot.off{background:#484f58}
+#top-ext{font-size:11px;color:#6e7681}
+
+/* â”€â”€ layout â”€â”€ */
+#main{flex:1;display:flex;min-height:0}
+#graph-wrap{flex:1;position:relative;overflow:hidden}
+#graph{position:absolute;inset:0;width:100%;height:100%;display:block}
+
+/* â”€â”€ sidebar â”€â”€ */
+#sidebar{width:310px;flex-shrink:0;border-left:1px solid #21262d;display:flex;flex-direction:column;background:#0d1117;overflow:hidden}
+
+/* self panel */
+#self-panel{padding:8px 12px 7px;border-bottom:1px solid #21262d;flex-shrink:0}
+#sp-nick{font-size:14px;font-weight:700;color:#c9d1d9}
+#sp-sub{font-size:11px;color:#8b949e;margin-top:1px}
+
+/* chat log */
+#chat-log{flex:1;overflow-y:auto;padding:8px 12px;display:flex;flex-direction:column;gap:3px;min-height:0}
+#chat-log::-webkit-scrollbar{width:3px}
+#chat-log::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
+.msg{font-size:12px;line-height:1.5;word-break:break-word}
+.msg .ts{color:#6e7681;font-size:10px;margin-right:3px}
+.msg .nick{font-weight:700;margin-right:3px}
+.msg.mine .nick{color:#58a6ff}
+.msg.theirs .nick{color:#3fb950}
+.msg.sys{color:#6e7681;font-style:italic;font-size:11px}
+
+/* section titles */
+.sec-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#6e7681;margin-bottom:5px}
+
+/* â”€â”€ send-file panel â”€â”€ */
+#send-panel{border-top:1px solid #21262d;padding:8px 12px;flex-shrink:0}
+#peer-sel{width:100%;background:#161b22;border:1px solid #30363d;color:#c9d1d9;border-radius:5px;padding:5px 8px;font-size:12px;outline:none;margin-bottom:6px;cursor:pointer}
+#peer-sel:focus{border-color:#388bfd}
+#peer-sel option{background:#161b22}
+#drop-zone{border:1.5px dashed #30363d;border-radius:6px;padding:10px 8px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;user-select:none}
+#drop-zone:hover,#drop-zone.hover{border-color:#388bfd;background:#0d2444}
+#drop-zone.ok{border-color:#3fb950;background:#0d2a1a}
+#dz-text{color:#8b949e;font-size:12px;margin-bottom:5px}
+#dz-text strong{color:#c9d1d9}
+.btn{border:none;border-radius:5px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:background .15s;line-height:1.5}
+.btn-ghost{background:#21262d;color:#c9d1d9}
+.btn-ghost:hover{background:#30363d}
+.btn-primary{background:#1f6feb;color:#fff}
+.btn-primary:hover{background:#388bfd}
+
+/* â”€â”€ files panel â”€â”€ */
+#files-panel{border-top:1px solid #21262d;padding:8px 12px 6px;flex-shrink:0;display:flex;flex-direction:column;max-height:176px}
+#files-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-shrink:0}
+#files-list{overflow-y:auto;flex:1}
+#files-list::-webkit-scrollbar{width:3px}
+#files-list::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
+.file-row{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:4px;cursor:pointer;font-size:12px;transition:background .1s}
+.file-row:hover{background:#161b22}
+.fi{font-size:13px;flex-shrink:0}
+.fn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c9d1d9}
+.fsz{color:#6e7681;font-size:10px;flex-shrink:0}
+.files-empty{color:#6e7681;font-size:11px;padding:4px 6px}
+/* ── shared folders panel ── */
+#folders-panel{border-top:1px solid #21262d;padding:8px 12px 6px;flex-shrink:0;display:flex;flex-direction:column;max-height:220px;display:none}
+.folder-block{margin-bottom:6px}
+.folder-hdr{display:flex;align-items:center;gap:5px;margin-bottom:3px}
+.folder-icon{font-size:11px;color:#58a6ff}
+.folder-name{font-size:11px;font-weight:700;color:#79c0ff}
+.folder-files{overflow-y:auto;max-height:80px}
+.folder-files::-webkit-scrollbar{width:3px}
+.folder-files::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
+/* â”€â”€ notifs â”€â”€ */
+#notifs{padding:0 12px 3px;display:flex;flex-direction:column;gap:2px;flex-shrink:0}
+.notif{font-size:11px;padding:3px 8px;border-radius:4px;background:#161b22;border:1px solid #21262d;color:#8b949e;animation:fadein .2s}
+.notif.ok{border-color:#238636;color:#3fb950}
+.notif.err{border-color:#da3633;color:#f85149}
+@keyframes fadein{from{opacity:0;transform:translateY(3px)}to{opacity:1}}
+
+/* â”€â”€ chat input â”€â”€ */
+#chat-row{padding:8px 12px;border-top:1px solid #21262d;display:flex;gap:6px;flex-shrink:0}
+#chat-text{flex:1;background:#161b22;border:1px solid #30363d;color:#c9d1d9;border-radius:5px;padding:5px 9px;font-size:12px;outline:none}
+#chat-text:focus{border-color:#388bfd}
+
+/* â”€â”€ SVG graph â”€â”€ */
+.conn-line{stroke:#21262d;stroke-width:1.5;stroke-dasharray:5 4}
+.p-circle{fill:#161b22;stroke:#30363d;stroke-width:2;cursor:pointer;transition:stroke .15s,fill .15s}
+.p-group.enc .p-circle{stroke:#388bfd}
+.p-nick{fill:#c9d1d9;text-anchor:middle;dominant-baseline:middle;font-size:13px;font-weight:600;pointer-events:none}
+.p-addr{fill:#8b949e;text-anchor:middle;dominant-baseline:middle;font-size:9px;pointer-events:none}
+.p-lock{text-anchor:middle;dominant-baseline:middle;font-size:10px;pointer-events:none}
+.p-drop{fill:#3fb950;text-anchor:middle;dominant-baseline:middle;font-size:10px;font-weight:700;pointer-events:none;display:none}
+.p-group.drag-on .p-circle{fill:#0d2a1a;stroke:#3fb950;stroke-width:3}
+.p-group.drag-on .p-drop{display:block}
+.s-group.drag-on .s-circle{fill:#1a3050;stroke:#58a6ff;stroke-width:3}
+.s-group.drag-on .s-drop{display:block}
+.s-circle{fill:#1c2e4a;stroke:#388bfd;stroke-width:2}
+.s-drop{fill:#58a6ff;text-anchor:middle;dominant-baseline:middle;font-size:10px;font-weight:700;pointer-events:none;display:none}
+.s-nick{fill:#c9d1d9;text-anchor:middle;dominant-baseline:middle;font-size:14px;font-weight:700;pointer-events:none}
+.s-addr{fill:#8b949e;text-anchor:middle;dominant-baseline:middle;font-size:9px;pointer-events:none}
+.s-ext{fill:#484f58;text-anchor:middle;dominant-baseline:middle;font-size:9px;pointer-events:none}
+@keyframes pulse{0%{r:56;opacity:.25}70%{r:72;opacity:0}100%{r:72;opacity:0}}
+.s-pulse{animation:pulse 2.6s ease-out infinite;fill:none;stroke:#388bfd;stroke-width:1.5}
+#empty-hint{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none;gap:6px;color:#21262d;font-size:14px}
+#empty-hint.hidden{display:none}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <span id="status-dot" class="off"></span>
+  <span id="top-nick" class="badge badge-self">-</span>
+  <span id="top-addr" style="font-size:12px;color:#8b949e"></span>
+  <span id="top-ext"></span>
+  <span id="top-crypto" class="badge badge-crypto" style="display:none">[enc] encrypted</span>
+  <span style="flex:1"></span>
+  <span id="peer-count" style="font-size:12px;color:#6e7681">0 peers</span>
+</div>
+
+<div id="main">
+
+  <div id="graph-wrap">
+    <svg id="graph" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="empty-hint">
+      <span>No peers connected</span>
+      <span style="font-size:12px;color:#30363d">Use <code style="color:#388bfd">--bootstrap</code> or /connect in CLI</span>
+    </div>
+  </div>
+
+  <div id="sidebar">
+
+    <div id="self-panel">
+      <div id="sp-nick">-</div>
+      <div id="sp-sub">-</div>
+    </div>
+
+    <div id="chat-log"></div>
+
+    <!-- send file -->
+    <div id="send-panel">
+      <div class="sec-title">Send File</div>
+      <select id="peer-sel"><option value="">- no peers -</option></select>
+      <label id="drop-zone" for="file-input" tabindex="0" aria-label="Drop file or click to browse">
+        <span id="dz-text"><strong>Drop file here</strong> or click to browse</span>
+        <input type="file" id="file-input" style="display:none" multiple>
+      </label>
+    </div>
+
+    <!-- received files -->
+    <div id="files-panel">
+      <div id="files-hdr">
+        <span class="sec-title" style="margin:0">Received Files</span>
+        <button class="btn btn-ghost" id="opendir-btn" type="button" style="padding:2px 8px;font-size:11px">Open folder</button>
+      </div>
+      <div id="files-list"><div class="files-empty">None yet</div></div>
+    </div>
+
+    <!-- shared folders -->
+    <div id="folders-panel">
+      <div style="margin-bottom:5px"><span class="sec-title">Shared Folders</span></div>
+      <div id="folders-body"></div>
+    </div>
+
+    <div id="notifs"></div>
+
+    <div id="chat-row">
+      <input id="chat-text" type="text" placeholder="Broadcast message..." autocomplete="off">
+      <button class="btn btn-primary" id="chat-send">Send</button>
+    </div>
+
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// â”€â”€ state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+let self_ = {nick:'', addr:'', crypto:false, ext_addr:''};
+const peers = new Map(); // addr → PeerInfo
+const folders = new Map(); // name → {name, files[]}
+
+// â”€â”€ SVG helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const NS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs={}) {
+  const el = document.createElementNS(NS, tag);
+  for (const [k,v] of Object.entries(attrs)) el.setAttribute(k,v);
+  return el;
+}
+
+// â”€â”€ render graph â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function render() {
+  const svg = document.getElementById('graph');
+  const W = svg.clientWidth||600, H = svg.clientHeight||600;
+  const cx=W/2, cy=H/2;
+  const peerList = [...peers.values()];
+  const R = Math.min(W,H)*0.32;
+  svg.innerHTML = '';
+
+  document.getElementById('empty-hint').classList.toggle('hidden', peerList.length>0);
+  document.getElementById('peer-count').textContent =
+    peerList.length===1 ? '1 peer' : `${peerList.length} peers`;
+
+  // lines
+  peerList.forEach((p,i)=>{
+    const a = (2*Math.PI*i/peerList.length) - Math.PI/2;
+    p._x = cx + R*Math.cos(a);
+    p._y = cy + R*Math.sin(a);
+    svg.appendChild(svgEl('line',{class:'conn-line',x1:cx,y1:cy,x2:p._x,y2:p._y}));
+  });
+
+  // peer nodes
+  for (const peer of peerList) {
+    const g = document.createElementNS(NS,'g');
+    g.setAttribute('class','p-group'+(peer.crypto?' enc':''));
+    g.setAttribute('data-addr',peer.addr);
+    g.appendChild(svgEl('circle',{class:'p-circle',cx:peer._x,cy:peer._y,r:40}));
+    const nt = svgEl('text',{class:'p-nick',x:peer._x,y:peer._y-10});
+    nt.textContent = peer.nick||peer.addr;
+    g.appendChild(nt);
+    const at = svgEl('text',{class:'p-addr',x:peer._x,y:peer._y+10});
+    at.textContent = peer.addr;
+    g.appendChild(at);
+    if (peer.crypto) {
+      const lk=svgEl('text',{class:'p-lock',x:peer._x+26,y:peer._y-26});
+      lk.textContent='[enc]'; g.appendChild(lk);
+    }
+    const dl=svgEl('text',{class:'p-drop',x:peer._x,y:peer._y+22});
+    dl.textContent='drop to send'; g.appendChild(dl);
+
+    // drag onto peer node
+    let dc=0;
+    g.addEventListener('dragenter',e=>{e.preventDefault();if(++dc===1)g.classList.add('drag-on');});
+    g.addEventListener('dragleave',()=>{if(--dc===0)g.classList.remove('drag-on');});
+    g.addEventListener('dragover',e=>e.preventDefault());
+    g.addEventListener('drop',e=>{
+      e.preventDefault();dc=0;g.classList.remove('drag-on');
+      if(e.dataTransfer.files[0]) sendFile(peer.addr,e.dataTransfer.files[0]);
+    });
+    svg.appendChild(g);
+  }
+
+  // self node
+  const sg=document.createElementNS(NS,'g');
+  sg.setAttribute('class','s-group');
+  sg.appendChild(svgEl('circle',{class:'s-pulse',cx,cy,r:56}));
+  sg.appendChild(svgEl('circle',{class:'s-circle',cx,cy,r:52}));
+  const extShown = !!self_.ext_addr;
+  const sn=svgEl('text',{class:'s-nick',x:cx,y:cy-(extShown?14:10)});
+  sn.textContent=self_.nick||'you'; sg.appendChild(sn);
+  const sa=svgEl('text',{class:'s-addr',x:cx,y:cy+(extShown?2:10)});
+  sa.textContent=self_.addr||''; sg.appendChild(sa);
+  if (extShown) {
+    const se=svgEl('text',{class:'s-ext',x:cx,y:cy+12});
+    se.textContent='ext: '+self_.ext_addr; sg.appendChild(se);
+  }
+  if (self_.crypto) {
+    const lk=svgEl('text',{class:'p-lock',x:cx+35,y:cy-35,'font-size':'13'});
+    lk.textContent='[enc]'; sg.appendChild(lk);
+  }
+  // broadcast-drop label
+  const sdl=svgEl('text',{class:'s-drop',x:cx,y:cy+26});
+  sdl.textContent='send to all'; sg.appendChild(sdl);
+  // drag-drop onto self = broadcast
+  let sdc=0;
+  sg.addEventListener('dragenter',e=>{e.preventDefault();if(++sdc===1)sg.classList.add('drag-on');});
+  sg.addEventListener('dragleave',()=>{if(--sdc===0)sg.classList.remove('drag-on');});
+  sg.addEventListener('dragover',e=>e.preventDefault());
+  sg.addEventListener('drop',e=>{
+    e.preventDefault();sdc=0;sg.classList.remove('drag-on');
+    const files=e.dataTransfer.files;
+    if(!files.length) return;
+    if(!peers.size){addNotif('No peers connected',true);return;}
+    for(const f of files) for(const addr of peers.keys()) sendFile(addr,f);
+  });
+  svg.appendChild(sg);
+}
+
+// â”€â”€ top bar & self panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function updateTopBar() {
+  document.getElementById('top-nick').textContent = self_.nick||'-';
+  document.getElementById('top-addr').textContent = self_.addr||'';
+  const xe=document.getElementById('top-ext');
+  xe.textContent = self_.ext_addr ? 'ext: '+self_.ext_addr : '';
+  document.getElementById('top-crypto').style.display = self_.crypto ? '' : 'none';
+  document.getElementById('sp-nick').textContent = self_.nick||'-';
+  const sub = [self_.addr||'-'];
+  if (self_.ext_addr) sub.push('ext: '+self_.ext_addr);
+  document.getElementById('sp-sub').textContent = sub.join('  |  ');
+  document.getElementById('status-dot').classList.remove('off');
+}
+
+// â”€â”€ peer selector â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function updatePeerSel() {
+  const sel=document.getElementById('peer-sel');
+  const cur=sel.value;
+  sel.innerHTML='';
+  if (!peers.size) {
+    sel.innerHTML='<option value="">- no peers -</option>';
+    return;
+  }
+  const ph=document.createElement('option');
+  ph.value=''; ph.textContent='- select peer -';
+  sel.appendChild(ph);
+  for (const [addr,p] of peers) {
+    const o=document.createElement('option');
+    o.value=addr; o.textContent=`${p.nick} (${addr})`;
+    if(addr===cur) o.selected=true;
+    sel.appendChild(o);
+  }
+  if(peers.size===1&&!cur) sel.value=[...peers.keys()][0];
+}
+
+// â”€â”€ chat â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function addChat(nick,text,t,mine=false) {
+  const log=document.getElementById('chat-log');
+  const d=document.createElement('div');
+  d.className='msg '+(mine?'mine':'theirs');
+  d.innerHTML=`<span class="ts">${t}</span><span class="nick">${esc(nick)}</span>${esc(text)}`;
+  log.appendChild(d);
+  log.scrollTop=log.scrollHeight;
+}
+function addSys(text) {
+  const log=document.getElementById('chat-log');
+  const d=document.createElement('div');
+  d.className='msg sys'; d.textContent=text;
+  log.appendChild(d);
+  log.scrollTop=log.scrollHeight;
+}
+function addNotif(text,isErr=false) {
+  const w=document.getElementById('notifs');
+  const d=document.createElement('div');
+  d.className='notif '+(isErr?'err':'ok');
+  d.textContent=text; w.appendChild(d);
+  setTimeout(()=>d.remove(),4000);
+}
+document.getElementById('chat-send').addEventListener('click',sendChat);
+document.getElementById('chat-text').addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();}
+});
+function sendChat() {
+  const inp=document.getElementById('chat-text');
+  const text=inp.value.trim(); if(!text) return; inp.value='';
+  fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})})
+    .catch(e=>addNotif(String(e),true));
+  addChat(self_.nick||'you',text,now(),true);
+}
+
+// â”€â”€ file send â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function sendFile(peerAddr,file) {
+  if(!peerAddr){addNotif('Select a peer first',true);return;}
+  addNotif(`Sending ${file.name}...`);
+  const fd=new FormData(); fd.append('file',file);
+  fetch('/file?peer='+encodeURIComponent(peerAddr),{method:'POST',body:fd})
+    .then(r=>r.ok?addNotif('Sent: '+file.name):r.text().then(t=>addNotif(t,true)))
+    .catch(e=>addNotif(String(e),true));
+}
+function sendFiles(files) {
+  const peer=document.getElementById('peer-sel').value;
+  for(const f of files) sendFile(peer,f);
+}
+
+// drop zone
+const dz=document.getElementById('drop-zone');
+dz.addEventListener('dragenter',e=>{e.preventDefault();dz.classList.add('hover');});
+dz.addEventListener('dragleave',e=>{if(!dz.contains(e.relatedTarget))dz.classList.remove('hover');});
+dz.addEventListener('dragover',e=>e.preventDefault());
+dz.addEventListener('drop',e=>{
+  e.preventDefault();dz.classList.remove('hover');
+  if(e.dataTransfer.files.length) sendFiles(e.dataTransfer.files);
+});
+document.getElementById('file-input').addEventListener('change',e=>{
+  sendFiles(e.target.files); e.target.value='';
+});
+
+// â”€â”€ file list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function loadFiles() {
+  fetch('/files').then(r=>r.json()).then(renderFiles).catch(()=>{});
+}
+function renderFiles(files) {
+  const list=document.getElementById('files-list');
+  if(!files||!files.length){
+    list.innerHTML='<div class="files-empty">None yet</div>';
+    return;
+  }
+  list.innerHTML='';
+  for(const f of files) {
+    const row=document.createElement('div');
+    row.className='file-row'; row.title='Open '+f.name;
+    row.innerHTML=`<span class="fi">${fileIcon(f.name)}</span><span class="fn">${esc(f.name)}</span><span class="fsz">${fmtBytes(f.size)}</span>`;
+    row.addEventListener('click',()=>fetch('/files/open?name='+encodeURIComponent(f.name)).catch(()=>{}));
+    list.appendChild(row);
+  }
+}
+document.getElementById('opendir-btn').addEventListener('click',()=>{
+  fetch('/files/opendir').catch(()=>{});
+});
+
+// â”€â”€ SSE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function connect() {
+  const es=new EventSource('/events');
+  es.addEventListener('init',e=>{
+    const {self:s,peers:ps}=JSON.parse(e.data);
+    self_=s; peers.clear();
+    (ps||[]).forEach(p=>peers.set(p.addr,p));
+    folders.clear();
+    (JSON.parse(e.data).folders||[]).forEach(f=>{folders.set(f.name,f);});
+    updateTopBar(); updatePeerSel(); requestAnimationFrame(render);
+    renderFolders();
+  });
+  es.addEventListener('peer_join',e=>{
+    const p=JSON.parse(e.data);
+    peers.set(p.addr,p); updatePeerSel(); render();
+    addSys(`+ ${p.nick} (${p.addr})${p.crypto?' [enc]':''} connected`);
+  });
+  es.addEventListener('peer_leave',e=>{
+    const {addr}=JSON.parse(e.data);
+    const p=peers.get(addr); peers.delete(addr);
+    updatePeerSel(); render();
+    addSys(`- ${p?p.nick:addr} disconnected`);
+  });
+  es.addEventListener('chat',e=>{
+    const {nick,text,time}=JSON.parse(e.data);
+    addChat(nick,text,time);
+  });
+  es.addEventListener('file_done',e=>{
+    const {path}=JSON.parse(e.data);
+    const name=path.replace(/\\/g,'/').split('/').pop();
+    addNotif('Received: '+name);
+    addSys('File received -> '+name);
+  });
+  es.addEventListener('files_changed',e=>{
+    renderFiles(JSON.parse(e.data));
+  });
+  es.addEventListener('folder_change',e=>{
+    const {folder,rel_path}=JSON.parse(e.data);
+    addSys(`[${folder}] updated: ${rel_path}`);
+  });
+  es.addEventListener('folder_delete',e=>{
+    const {folder,rel_path}=JSON.parse(e.data);
+    addSys(`[${folder}] deleted: ${rel_path}`);
+  });
+  es.addEventListener('folder_files',e=>{
+    const {folder,files}=JSON.parse(e.data);
+    const sf=folders.get(folder)||{name:folder,files:[]};
+    sf.files=files||[];
+    folders.set(folder,sf);
+    renderFolders();
+  });
+  es.onerror=()=>document.getElementById('status-dot').classList.add('off');
+  es.onopen =()=>document.getElementById('status-dot').classList.remove('off');
+}
+
+// ── shared folders ──────────────────────────────────────────────────────────
+function renderFolders() {
+  const panel=document.getElementById('folders-panel');
+  const body=document.getElementById('folders-body');
+  if(!folders.size){panel.style.display='none';return;}
+  panel.style.display='flex';
+  body.innerHTML='';
+  for(const [name,sf] of folders){
+    const block=document.createElement('div');
+    block.className='folder-block';
+    const hdr=document.createElement('div');
+    hdr.className='folder-hdr';
+    hdr.innerHTML=`<span class="folder-icon">[sync]</span><span class="folder-name">${esc(name)}</span><span class="fsz" style="margin-left:auto">${(sf.files||[]).length} file${(sf.files||[]).length===1?'':'s'}</span>`;
+    block.appendChild(hdr);
+    const fl=document.createElement('div');
+    fl.className='folder-files';
+    if(!sf.files||!sf.files.length){
+      fl.innerHTML='<div class="files-empty">Empty</div>';
+    } else {
+      for(const f of sf.files){
+        const row=document.createElement('div');
+        row.className='file-row';
+        row.innerHTML=`<span class="fi">${fileIcon(f.name)}</span><span class="fn">${esc(f.name)}</span><span class="fsz">${fmtBytes(f.size)}</span>`;
+        fl.appendChild(row);
+      }
+    }
+    block.appendChild(fl);
+    body.appendChild(block);
+  }
+}
+
+// â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function now(){const d=new Date();return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');}
+function fmtBytes(n){if(n<1024)return n+' B';if(n<1048576)return(n/1024).toFixed(1)+' KB';return(n/1048576).toFixed(1)+' MB';}
+function fileIcon(name){
+  const m={png:'[img]',jpg:'[img]',jpeg:'[img]',gif:'[img]',webp:'[img]',svg:'[img]',
+    pdf:'[pdf]',txt:'[txt]',md:'[txt]',doc:'[doc]',docx:'[doc]',csv:'[csv]',xlsx:'[csv]',
+    zip:'[zip]',gz:'[zip]',tar:'[zip]',rar:'[zip]','7z':'[zip]',
+    mp4:'[vid]',mov:'[vid]',avi:'[vid]',mkv:'[vid]',mp3:'[aud]',wav:'[aud]',flac:'[aud]',
+    exe:'[exe]',msi:'[exe]',dmg:'[exe]',sh:'[sh]',py:'[py]',js:'[js]',ts:'[ts]',go:'[go]'};
+  return m[name.split('.').pop().toLowerCase()]||'[?]';
+}
+
+let rt;
+window.addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(render,60);});
+window.addEventListener('load',render);
+connect();
+</script>
+</body>
+</html>
