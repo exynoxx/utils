@@ -45,11 +45,20 @@ func NewCryptoConn(rw io.ReadWriter, localPriv, remotePub [32]byte) *CryptoConn 
 // WriteMessage encrypts msg and writes it with the wire format:
 //
 //	[4-byte big-endian length of (nonce+ciphertext)][24-byte nonce][ciphertext]
+//
+// The plaintext is itself [4-byte json_len][JSON][bin], matching the unencrypted
+// wire format minus the outer 8-byte length pair (sealed_len bounds the whole).
 func (c *CryptoConn) WriteMessage(msg Message) error {
-	plain, err := json.Marshal(msg)
+	jsonBytes, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
+
+	// Build plaintext: [4-byte json_len][JSON][bin]
+	plain := make([]byte, 4+len(jsonBytes)+len(msg.Bin))
+	binary.BigEndian.PutUint32(plain[0:4], uint32(len(jsonBytes)))
+	copy(plain[4:4+len(jsonBytes)], jsonBytes)
+	copy(plain[4+len(jsonBytes):], msg.Bin)
 
 	var nonce [24]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -95,9 +104,21 @@ func (c *CryptoConn) ReadMessage() (Message, error) {
 		return Message{}, fmt.Errorf("decryption failed: authentication tag mismatch")
 	}
 
+	// Plaintext is [4-byte json_len][JSON][bin].
+	if len(plain) < 4 {
+		return Message{}, fmt.Errorf("decrypted plaintext too short")
+	}
+	jsonLen := binary.BigEndian.Uint32(plain[0:4])
+	if int(jsonLen) > len(plain)-4 {
+		return Message{}, fmt.Errorf("decrypted json_len overruns plaintext")
+	}
 	var msg Message
-	if err := json.Unmarshal(plain, &msg); err != nil {
+	if err := json.Unmarshal(plain[4:4+jsonLen], &msg); err != nil {
 		return Message{}, fmt.Errorf("unmarshal: %w", err)
+	}
+	if int(jsonLen) < len(plain)-4 {
+		msg.Bin = make([]byte, len(plain)-4-int(jsonLen))
+		copy(msg.Bin, plain[4+jsonLen:])
 	}
 	return msg, nil
 }

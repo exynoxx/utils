@@ -42,6 +42,7 @@ type Node struct {
 	onPeer      []func(PeerInfo) // notified when a new peer connects
 	onPeerLeave []func(addr string) // notified when a peer disconnects
 	onProgress  []func(name string, sent, total int64, recv bool, peerAddr string) // transfer progress
+	onFileAck   []func(peerAddr, id string, ok bool, errMsg string)
 	onFolderChange []func(folderName, relPath, absPath string, deleted bool)
 	folders   map[string]*sharedFolder
 	closeOnce sync.Once
@@ -65,6 +66,12 @@ func New(cfg Config) (*Node, error) {
 			fn(name, sent, total, true, peerAddr)
 		}
 	}))
+	// Receiver ACK path: route file_ack messages back to the original sender.
+	n.recv.SetAckSender(func(peerAddr string, msg protocol.Message) {
+		if p := n.peers.Get(peerAddr); p != nil {
+			p.Send(msg)
+		}
+	})
 	if cfg.Crypto {
 		kp, err := protocol.GenerateKeyPair()
 		if err != nil {
@@ -482,6 +489,9 @@ func (n *Node) initPeer(conn net.Conn, knownAddr string, requestPeerList bool) {
 	go func() {
 		<-p.Done()
 		n.peers.Remove(p.Addr)
+		// Drop any in-flight receives so we don't leak partial files when the
+		// sender vanishes mid-transfer.
+		n.recv.AbortPeer(p.Addr)
 		fmt.Printf("[info] peer %s (%s) disconnected\n", p.Nick, p.Addr)
 		for _, fn := range n.onPeerLeave {
 			fn(p.Addr)
@@ -538,7 +548,11 @@ func (n *Node) handleMessage(p *Peer, msg protocol.Message) {
 			}
 		})
 	case protocol.MsgFileChunk:
-		n.recv.HandleChunk(msg.Payload)
+		n.recv.HandleChunk(msg.Payload, msg.Bin)
+	case protocol.MsgFileChecksum:
+		n.recv.HandleChecksum(msg.Payload)
+	case protocol.MsgFileAck:
+		n.handleFileAck(p, msg)
 	case protocol.MsgPeerListReq:
 		n.handlePeerListReq(p)
 	case protocol.MsgPeerListRes:
@@ -564,6 +578,29 @@ func (n *Node) handleChat(msg protocol.Message) {
 	for _, fn := range n.onChat {
 		fn(chat.Nick, chat.Text, time.Unix(chat.Time, 0))
 	}
+}
+
+// handleFileAck logs the receiver's confirmation (or failure) for a file we
+// sent. Surfaced via the OnFileAck callback for UI integration.
+func (n *Node) handleFileAck(p *Peer, msg protocol.Message) {
+	var ack protocol.FileAckPayload
+	if err := json.Unmarshal(msg.Payload, &ack); err != nil {
+		return
+	}
+	if ack.OK {
+		fmt.Printf("[ack] peer %s confirmed file %s\n", p.Addr, ack.ID)
+	} else {
+		fmt.Printf("[ack] peer %s reported FAILED file %s: %s\n", p.Addr, ack.ID, ack.Err)
+	}
+	for _, fn := range n.onFileAck {
+		fn(p.Addr, ack.ID, ack.OK, ack.Err)
+	}
+}
+
+// OnFileAck registers a callback invoked when a peer acknowledges (or fails)
+// a file we sent. id is the per-transfer ID.
+func (n *Node) OnFileAck(fn func(peerAddr, id string, ok bool, errMsg string)) {
+	n.onFileAck = append(n.onFileAck, fn)
 }
 
 // handleHolePunchReq processes an inbound hole-punch request.

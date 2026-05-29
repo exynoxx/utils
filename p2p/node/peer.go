@@ -62,8 +62,14 @@ func (p *Peer) Done() <-chan struct{} {
 func (p *Peer) HasCrypto() bool { return p.crypto != nil }
 
 // writeLoop drains writeCh and sends messages to the peer.
+//
+// We use a large bufio.Writer (1 MB) and only Flush when writeCh is drained
+// (or when crypto is active — CryptoConn writes straight to the conn). This
+// lets back-to-back small messages coalesce into one syscall, and a 1 MB
+// chunk's 8-byte header + JSON + raw bytes don't fragment into tiny writes.
 func (p *Peer) writeLoop() {
-	w := bufio.NewWriter(p.Conn)
+	const writeBufSize = 1024 * 1024
+	w := bufio.NewWriterSize(p.Conn, writeBufSize)
 	for {
 		select {
 		case <-p.done:
@@ -77,7 +83,8 @@ func (p *Peer) writeLoop() {
 				err = p.crypto.WriteMessage(msg)
 			} else {
 				err = protocol.WriteMessage(w, msg)
-				if err == nil {
+				// Only flush when no more work is queued, so chunks coalesce.
+				if err == nil && len(p.writeCh) == 0 {
 					err = w.Flush()
 				}
 			}

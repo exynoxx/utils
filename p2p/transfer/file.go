@@ -21,6 +21,16 @@ import (
 
 const chunkSize = 1024 * 1024 // 1 MB per chunk
 
+// chunkPool reuses 1 MB scratch buffers so we don't allocate one per chunk.
+// Note: the buffer is consumed synchronously by sendFn (which serialises into
+// its own buffer in WriteMessage), so it's safe to put back when sendFn returns.
+var chunkPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, chunkSize)
+		return &b
+	},
+}
+
 // SendFunc is the signature for enqueuing a message to a specific peer.
 type SendFunc func(msg protocol.Message)
 
@@ -29,9 +39,12 @@ type SendFunc func(msg protocol.Message)
 // be nil.
 type ProgressFunc func(name string, sent, total int64, peerAddr string)
 
-// Send reads the file at path, announces it via file_meta, then streams
-// file_chunk messages using sendFn.  progressFn (may be nil) is called with
-// the current byte count after each chunk; peerAddr is forwarded into it so
+// Send streams the file at path to a peer.  It announces the file with
+// MsgFileMeta, sends MsgFileChunk messages (raw bytes in Message.Bin — no
+// base64), and emits a MsgFileChecksum trailer.  The file is read exactly
+// once; SHA-256 is computed while streaming.
+//
+// progressFn (may be nil) is called per chunk; peerAddr is forwarded so
 // callers can attribute progress events to a peer.
 func Send(path, peerAddr string, sendFn SendFunc, progressFn ProgressFunc) error {
 	f, err := os.Open(path)
@@ -45,59 +58,73 @@ func Send(path, peerAddr string, sendFn SendFunc, progressFn ProgressFunc) error
 		return fmt.Errorf("stat file: %w", err)
 	}
 
-	checksum, err := sha256File(f)
-	if err != nil {
-		return fmt.Errorf("checksum: %w", err)
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("seek: %w", err)
-	}
-
 	id := generateID()
 	metaMsg, err := protocol.NewMessage(protocol.MsgFileMeta, protocol.FileMetaPayload{
-		ID:       id,
-		Name:     filepath.Base(path),
-		Size:     info.Size(),
-		Checksum: checksum,
+		ID:   id,
+		Name: filepath.Base(path),
+		Size: info.Size(),
+		// Checksum sent as a trailer (MsgFileChecksum) — we compute it streaming.
 	})
 	if err != nil {
 		return fmt.Errorf("build file_meta: %w", err)
 	}
 	sendFn(metaMsg)
 
-	buf := make([]byte, chunkSize)
+	checksum, err := streamChunks(f, id, info.Size(), filepath.Base(path), peerAddr, sendFn, progressFn)
+	if err != nil {
+		return err
+	}
+
+	trailer, err := protocol.NewMessage(protocol.MsgFileChecksum, protocol.FileChecksumPayload{
+		ID:       id,
+		Checksum: checksum,
+	})
+	if err != nil {
+		return fmt.Errorf("build file_checksum: %w", err)
+	}
+	sendFn(trailer)
+	return nil
+}
+
+// streamChunks reads f sequentially, dispatching MsgFileChunk messages with
+// raw bytes in Message.Bin while updating a running SHA-256 over the stream.
+// Returns the hex-encoded final hash.
+func streamChunks(f *os.File, id string, total int64, displayName, peerAddr string, sendFn SendFunc, progressFn ProgressFunc) (string, error) {
+	h := sha256.New()
+	bufPtr := chunkPool.Get().(*[]byte)
+	defer chunkPool.Put(bufPtr)
+	buf := *bufPtr
+
 	index := 0
 	var sent int64
 	for {
 		n, readErr := f.Read(buf)
 		if n > 0 {
 			sent += int64(n)
-			final := readErr == io.EOF || sent >= info.Size()
+			final := readErr == io.EOF || sent >= total
+			// Hash from the same bytes we're sending — single read.
+			h.Write(buf[:n])
+
+			// Copy the chunk we hand to sendFn so the next loop iteration can
+			// safely overwrite buf. sendFn is asynchronous (queues to writeCh).
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
 
-			chunkMsg, err := protocol.NewMessage(protocol.MsgFileChunk, protocol.FileChunkPayload{
+			chunkMsg, err := protocol.NewMessageBin(protocol.MsgFileChunk, protocol.FileChunkPayload{
 				ID:    id,
 				Index: index,
-				Data:  chunk,
 				Final: final,
-			})
+			}, chunk)
 			if err != nil {
-				return fmt.Errorf("build file_chunk: %w", err)
+				return "", fmt.Errorf("build file_chunk: %w", err)
 			}
 			sendFn(chunkMsg)
 
-			var pct float64
-			if info.Size() > 0 {
-				pct = float64(sent) / float64(info.Size()) * 100
-			}
-			fmt.Printf("\r[send] %s  %.1f%%", filepath.Base(path), pct)
 			if progressFn != nil {
-				progressFn(filepath.Base(path), sent, info.Size(), peerAddr)
+				progressFn(displayName, sent, total, peerAddr)
 			}
 			index++
 			if final {
-				fmt.Println()
 				break
 			}
 		}
@@ -105,10 +132,10 @@ func Send(path, peerAddr string, sendFn SendFunc, progressFn ProgressFunc) error
 			if readErr == io.EOF {
 				break
 			}
-			return fmt.Errorf("read file: %w", readErr)
+			return "", fmt.Errorf("read file: %w", readErr)
 		}
 	}
-	return nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // --- Receiver ---
@@ -117,24 +144,33 @@ func Send(path, peerAddr string, sendFn SendFunc, progressFn ProgressFunc) error
 // Chunks are streamed directly to disk as they arrive (TCP guarantees order),
 // so memory usage is bounded to one chunk at a time regardless of file size.
 type session struct {
-	meta       protocol.FileMetaPayload
-	file       *os.File   // open for writing; closed when Final chunk processed
-	hash       hash.Hash  // running sha256 updated per chunk
-	received   int64
-	outPath    string // final destination path
-	peerAddr   string // sender address, surfaced via progressFn
-	mu         sync.Mutex
-	onComplete func(string)
-	progressFn ProgressFunc // may be nil
+	meta            protocol.FileMetaPayload
+	file            *os.File  // open for writing; closed when Final chunk processed
+	hash            hash.Hash // running sha256 updated per chunk
+	received        int64
+	outPath         string // final destination path
+	peerAddr        string // sender address, surfaced via progressFn
+	mu              sync.Mutex
+	gotFinal        bool                              // last chunk processed; awaiting checksum trailer
+	onComplete      func(string)                      // for plain files
+	onFolderDone    func(folder, rel, abs string)     // for folder files
+	folderName      string                            // non-empty when this is a folder transfer
+	folderRel       string                            // forward-slash relPath inside folder
+	progressFn      ProgressFunc                      // may be nil
+	ackPayloadType  string                            // protocol.MsgFileAck (always for now)
 }
 
-// Receiver collects incoming file_meta and file_chunk messages and writes
-// completed transfers to outDir.
+// AckSender is the signature for sending an ACK back to the file's sender.
+type AckSender func(peerAddr string, msg protocol.Message)
+
+// Receiver collects incoming file_meta, file_chunk, and file_checksum messages
+// and writes completed transfers to outDir. It can send ACKs back via ackSend.
 type Receiver struct {
 	outDir     string
 	mu         sync.Mutex
 	sessions   map[string]*session
 	progressFn ProgressFunc // applied to all new receive sessions; may be nil
+	ackSend    AckSender    // may be nil
 }
 
 // NewReceiver creates a Receiver that writes completed files to outDir.
@@ -150,10 +186,14 @@ func NewReceiver(outDir string) *Receiver {
 // transfers begin (not thread-safe with active sessions).
 func (r *Receiver) SetProgressFunc(fn ProgressFunc) { r.progressFn = fn }
 
+// SetAckSender wires up the function used to send file_ack messages back to
+// the sender after checksum verification.
+func (r *Receiver) SetAckSender(fn AckSender) { r.ackSend = fn }
+
 // HandleMeta processes a file_meta payload (raw JSON). peerAddr identifies
 // the sender so the receive-side progress callback can attribute bytes to a
 // peer. onComplete is called with the final file path once all chunks have
-// arrived.
+// arrived and the checksum has been verified.
 func (r *Receiver) HandleMeta(raw json.RawMessage, peerAddr string, onComplete func(path string)) {
 	var meta protocol.FileMetaPayload
 	if err := json.Unmarshal(raw, &meta); err != nil {
@@ -187,9 +227,10 @@ func (r *Receiver) HandleMeta(raw json.RawMessage, peerAddr string, onComplete f
 	fmt.Printf("[recv] incoming file: %s (%d bytes)\n", meta.Name, meta.Size)
 }
 
-// HandleChunk processes a file_chunk payload (raw JSON).
-// Each chunk is written directly to disk; no full-file buffering occurs.
-func (r *Receiver) HandleChunk(raw json.RawMessage) {
+// HandleChunk processes a file_chunk payload (raw JSON header) plus the raw
+// bytes carried in msg.Bin. Each chunk is written directly to disk; no
+// full-file buffering occurs.
+func (r *Receiver) HandleChunk(raw json.RawMessage, bin []byte) {
 	var chunk protocol.FileChunkPayload
 	if err := json.Unmarshal(raw, &chunk); err != nil {
 		fmt.Printf("[warn] bad file_chunk: %v\n", err)
@@ -198,11 +239,7 @@ func (r *Receiver) HandleChunk(raw json.RawMessage) {
 
 	r.mu.Lock()
 	sess, ok := r.sessions[chunk.ID]
-	if ok && chunk.Final {
-		delete(r.sessions, chunk.ID)
-	}
 	r.mu.Unlock()
-
 	if !ok {
 		return
 	}
@@ -210,14 +247,13 @@ func (r *Receiver) HandleChunk(raw json.RawMessage) {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 
-	if _, err := sess.file.Write(chunk.Data); err != nil {
+	if _, err := sess.file.Write(bin); err != nil {
 		fmt.Printf("[error] write chunk for %s: %v\n", sess.meta.Name, err)
-		sess.file.Close()
-		os.Remove(sess.outPath)
+		r.abortSession(chunk.ID, sess, "write error")
 		return
 	}
-	sess.hash.Write(chunk.Data)
-	sess.received += int64(len(chunk.Data))
+	sess.hash.Write(bin)
+	sess.received += int64(len(bin))
 
 	var pct float64
 	if sess.meta.Size > 0 {
@@ -230,34 +266,136 @@ func (r *Receiver) HandleChunk(raw json.RawMessage) {
 
 	if chunk.Final {
 		fmt.Println()
+		// Close the file but keep the session alive until the checksum
+		// trailer arrives; finalisation happens in HandleChecksum.
 		if err := sess.file.Close(); err != nil {
 			fmt.Printf("[error] close output file %s: %v\n", sess.outPath, err)
-			os.Remove(sess.outPath)
+			r.abortSession(chunk.ID, sess, "close error")
 			return
 		}
-		got := hex.EncodeToString(sess.hash.Sum(nil))
-		if got != sess.meta.Checksum {
-			fmt.Printf("[error] checksum mismatch for %s (want %s got %s)\n",
-				sess.meta.Name, sess.meta.Checksum, got)
-			os.Remove(sess.outPath)
-			return
+		sess.file = nil
+		sess.gotFinal = true
+		// If the sender embedded a checksum in the meta (legacy), verify now.
+		if sess.meta.Checksum != "" {
+			r.finalize(chunk.ID, sess, sess.meta.Checksum)
 		}
+	}
+}
+
+// HandleChecksum processes a file_checksum trailer message. It verifies the
+// running hash against the trailer, finalises the session, and sends an ACK.
+func (r *Receiver) HandleChecksum(raw json.RawMessage) {
+	var tr protocol.FileChecksumPayload
+	if err := json.Unmarshal(raw, &tr); err != nil {
+		fmt.Printf("[warn] bad file_checksum: %v\n", err)
+		return
+	}
+	r.mu.Lock()
+	sess, ok := r.sessions[tr.ID]
+	r.mu.Unlock()
+	if !ok {
+		// Either already finalised or unknown session.
+		return
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if !sess.gotFinal {
+		// Trailer arrived before final chunk somehow — should not happen with
+		// in-order TCP, but record the expected checksum and bail.
+		sess.meta.Checksum = tr.Checksum
+		return
+	}
+	r.finalize(tr.ID, sess, tr.Checksum)
+}
+
+// finalize must be called with sess.mu held. It removes the session from the
+// registry, verifies the checksum, fires callbacks, and emits an ACK.
+func (r *Receiver) finalize(id string, sess *session, wantChecksum string) {
+	r.mu.Lock()
+	delete(r.sessions, id)
+	r.mu.Unlock()
+
+	got := hex.EncodeToString(sess.hash.Sum(nil))
+	if got != wantChecksum {
+		fmt.Printf("[error] checksum mismatch for %s (want %s got %s)\n",
+			sess.meta.Name, wantChecksum, got)
+		os.Remove(sess.outPath)
+		r.sendAck(sess.peerAddr, id, false, fmt.Sprintf("checksum mismatch (want %s got %s)", wantChecksum, got))
+		return
+	}
+	if sess.folderName != "" {
+		fmt.Printf("[folder] file saved: %s\n", sess.outPath)
+		if sess.onFolderDone != nil {
+			sess.onFolderDone(sess.folderName, sess.folderRel, sess.outPath)
+		}
+	} else {
 		fmt.Printf("[recv] file saved: %s\n", sess.outPath)
 		if sess.onComplete != nil {
 			sess.onComplete(sess.outPath)
 		}
 	}
+	r.sendAck(sess.peerAddr, id, true, "")
+}
+
+// abortSession cleans up a partially-received file and sends a failure ACK.
+// Caller must hold sess.mu.
+func (r *Receiver) abortSession(id string, sess *session, reason string) {
+	r.mu.Lock()
+	delete(r.sessions, id)
+	r.mu.Unlock()
+	if sess.file != nil {
+		sess.file.Close()
+		sess.file = nil
+	}
+	os.Remove(sess.outPath)
+	r.sendAck(sess.peerAddr, id, false, reason)
+}
+
+func (r *Receiver) sendAck(peerAddr, id string, ok bool, errStr string) {
+	if r.ackSend == nil || peerAddr == "" {
+		return
+	}
+	msg, err := protocol.NewMessage(protocol.MsgFileAck, protocol.FileAckPayload{
+		ID: id, OK: ok, Err: errStr,
+	})
+	if err != nil {
+		return
+	}
+	r.ackSend(peerAddr, msg)
+}
+
+// AbortPeer cleans up any in-flight receives for the given peer (e.g. when
+// the peer disconnects). Removes partial files from disk.
+func (r *Receiver) AbortPeer(peerAddr string) {
+	r.mu.Lock()
+	ids := make([]string, 0)
+	for id, sess := range r.sessions {
+		if sess.peerAddr == peerAddr {
+			ids = append(ids, id)
+		}
+	}
+	r.mu.Unlock()
+	for _, id := range ids {
+		r.mu.Lock()
+		sess, ok := r.sessions[id]
+		if ok {
+			delete(r.sessions, id)
+		}
+		r.mu.Unlock()
+		if !ok {
+			continue
+		}
+		sess.mu.Lock()
+		if sess.file != nil {
+			sess.file.Close()
+		}
+		os.Remove(sess.outPath)
+		sess.mu.Unlock()
+		fmt.Printf("[recv] aborted incomplete transfer %s (peer %s disconnected)\n", sess.meta.Name, peerAddr)
+	}
 }
 
 // --- helpers ---
-
-func sha256File(r io.Reader) (string, error) {
-	h := sha256.New()
-	if _, err := io.Copy(h, r); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
 
 // generateID returns a cryptographically random hex string as a transfer ID.
 func generateID() string {
@@ -316,27 +454,22 @@ func (r *Receiver) HandleFolderMeta(raw json.RawMessage, folderDir, peerAddr str
 			Size:     meta.Size,
 			Checksum: meta.Checksum,
 		},
-		file:     f,
-		hash:     sha256.New(),
-		outPath:  outPath,
-		peerAddr: peerAddr,
-		onComplete: func(path string) {
-			if onComplete != nil {
-				onComplete(meta.Folder, filepath.ToSlash(relPath), path)
-			}
-		},
-		progressFn: r.progressFn,
+		file:         f,
+		hash:         sha256.New(),
+		outPath:      outPath,
+		peerAddr:     peerAddr,
+		folderName:   meta.Folder,
+		folderRel:    filepath.ToSlash(relPath),
+		onFolderDone: onComplete,
+		progressFn:   r.progressFn,
 	}
 	r.mu.Unlock()
 
 	fmt.Printf("[folder] incoming %s/%s (%d bytes)\n", meta.Folder, meta.RelPath, meta.Size)
 }
 
-// SendFolderFile reads absPath and sends it as a shared-folder file transfer.
-// relPath is forward-slash relative to the folder root. Chunks are sent as
-// ordinary MsgFileChunk messages (same ID-keyed routing as normal transfers).
-// progressFn (may be nil) is invoked per chunk with (relPath, sent, total,
-// peerAddr).
+// SendFolderFile streams absPath as a shared-folder file transfer.  Reads the
+// file exactly once; SHA-256 is computed streaming and sent as a trailer.
 func SendFolderFile(folderName, relPath, absPath string, modTime int64, peerAddr string, sendFn SendFunc, progressFn ProgressFunc) error {
 	f, err := os.Open(absPath)
 	if err != nil {
@@ -349,62 +482,32 @@ func SendFolderFile(folderName, relPath, absPath string, modTime int64, peerAddr
 		return fmt.Errorf("stat file: %w", err)
 	}
 
-	checksum, err := sha256File(f)
-	if err != nil {
-		return fmt.Errorf("checksum: %w", err)
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("seek: %w", err)
-	}
-
 	id := generateID()
 	metaMsg, err := protocol.NewMessage(protocol.MsgFolderFileMeta, protocol.FolderFileMetaPayload{
-		Folder:   folderName,
-		ID:       id,
-		RelPath:  relPath,
-		Size:     info.Size(),
-		Checksum: checksum,
-		ModTime:  modTime,
+		Folder:  folderName,
+		ID:      id,
+		RelPath: relPath,
+		Size:    info.Size(),
+		ModTime: modTime,
+		// Checksum follows as MsgFileChecksum trailer.
 	})
 	if err != nil {
 		return fmt.Errorf("build folder_file_meta: %w", err)
 	}
 	sendFn(metaMsg)
 
-	buf := make([]byte, chunkSize)
-	index := 0
-	var sent int64
-	for {
-		n, readErr := f.Read(buf)
-		if n > 0 {
-			sent += int64(n)
-			final := readErr == io.EOF || sent >= info.Size()
-			chunk := make([]byte, n)
-			copy(chunk, buf[:n])
-			chunkMsg, err := protocol.NewMessage(protocol.MsgFileChunk, protocol.FileChunkPayload{
-				ID:    id,
-				Index: index,
-				Data:  chunk,
-				Final: final,
-			})
-			if err != nil {
-				return fmt.Errorf("build file_chunk: %w", err)
-			}
-			sendFn(chunkMsg)
-			if progressFn != nil {
-				progressFn(relPath, sent, info.Size(), peerAddr)
-			}
-			index++
-			if final {
-				break
-			}
-		}
-		if readErr != nil {
-			if readErr == io.EOF {
-				break
-			}
-			return fmt.Errorf("read file: %w", readErr)
-		}
+	checksum, err := streamChunks(f, id, info.Size(), relPath, peerAddr, sendFn, progressFn)
+	if err != nil {
+		return err
 	}
+
+	trailer, err := protocol.NewMessage(protocol.MsgFileChecksum, protocol.FileChecksumPayload{
+		ID:       id,
+		Checksum: checksum,
+	})
+	if err != nil {
+		return fmt.Errorf("build file_checksum: %w", err)
+	}
+	sendFn(trailer)
 	return nil
 }

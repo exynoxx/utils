@@ -13,6 +13,8 @@ const (
 	MsgChat            = "chat"
 	MsgFileMeta        = "file_meta"
 	MsgFileChunk       = "file_chunk"
+	MsgFileChecksum    = "file_checksum" // trailer: SHA-256 of preceding chunks
+	MsgFileAck         = "file_ack"      // receiver → sender: file ok / failed
 	MsgPeerListReq     = "peer_list_req"
 	MsgPeerListRes     = "peer_list_res"
 	MsgHandshake       = "handshake"
@@ -26,10 +28,13 @@ const (
 	MsgFolderDelete   = "folder_delete"
 )
 
-// Message is the top-level wire format: a type tag + raw JSON payload.
+// Message is the top-level wire format: a type tag, a JSON payload, and an
+// optional binary trailer that is NOT JSON-encoded. The trailer lets us avoid
+// base64 inflation on large blobs like file chunks.
 type Message struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
+	Bin     []byte          `json:"-"` // raw binary; goes in the wire trailer
 }
 
 // --- Payload types ---
@@ -72,18 +77,37 @@ type HolePunchAckPayload struct {
 	RequesterExtUDP string `json:"requester_ext_udp"` // used by relays to route the ack back
 }
 
+// FileMetaPayload introduces a file_meta message. Checksum may be empty when
+// the sender is computing it streaming; in that case the receiver waits for a
+// MsgFileChecksum trailer keyed by ID before verifying and finalising.
 type FileMetaPayload struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Size     int64  `json:"size"`
-	Checksum string `json:"checksum"` // hex-encoded SHA-256
+	Checksum string `json:"checksum,omitempty"` // hex-encoded SHA-256; optional
 }
 
+// FileChunkPayload carries chunk metadata only; the raw bytes ride in
+// Message.Bin to avoid base64 overhead.
 type FileChunkPayload struct {
 	ID    string `json:"id"`
 	Index int    `json:"index"`
-	Data  []byte `json:"data"`
 	Final bool   `json:"final"`
+}
+
+// FileChecksumPayload is sent after the final chunk when the sender computed
+// the hash streaming. The receiver verifies it against its accumulated hash.
+type FileChecksumPayload struct {
+	ID       string `json:"id"`
+	Checksum string `json:"checksum"` // hex-encoded SHA-256
+}
+
+// FileAckPayload is the receiver's positive (or negative) confirmation that a
+// file arrived intact. Sent after checksum verification on the receive side.
+type FileAckPayload struct {
+	ID  string `json:"id"`
+	OK  bool   `json:"ok"`
+	Err string `json:"err,omitempty"`
 }
 
 // --- Shared folder payloads ---
@@ -94,14 +118,15 @@ type FolderAnnouncePayload struct {
 }
 
 // FolderFileMetaPayload precedes chunks for a shared-folder file.
-// Chunks arrive as ordinary MsgFileChunk messages keyed by ID.
+// Chunks arrive as ordinary MsgFileChunk messages keyed by ID. Checksum may be
+// empty (see FileMetaPayload notes).
 type FolderFileMetaPayload struct {
 	Folder   string `json:"folder"`
 	ID       string `json:"id"`
-	RelPath  string `json:"rel_path"`  // forward-slash relative path inside the folder
+	RelPath  string `json:"rel_path"` // forward-slash relative path inside the folder
 	Size     int64  `json:"size"`
-	Checksum string `json:"checksum"`  // hex-encoded SHA-256
-	ModTime  int64  `json:"mod_time"`  // unix seconds — used for last-write-wins
+	Checksum string `json:"checksum,omitempty"` // hex-encoded SHA-256; optional
+	ModTime  int64  `json:"mod_time"`           // unix seconds — used for last-write-wins
 }
 
 // FolderDeletePayload signals that a file was removed from a shared folder.
@@ -119,6 +144,17 @@ func NewMessage(msgType string, payload interface{}) (Message, error) {
 	return Message{Type: msgType, Payload: raw}, nil
 }
 
+// NewMessageBin is like NewMessage but attaches a binary trailer that is sent
+// raw on the wire (no base64).
+func NewMessageBin(msgType string, payload interface{}, bin []byte) (Message, error) {
+	msg, err := NewMessage(msgType, payload)
+	if err != nil {
+		return Message{}, err
+	}
+	msg.Bin = bin
+	return msg, nil
+}
+
 // NewChatMessage is a convenience for chat messages.
 func NewChatMessage(nick, text string) (Message, error) {
 	return NewMessage(MsgChat, ChatPayload{
@@ -128,45 +164,66 @@ func NewChatMessage(nick, text string) (Message, error) {
 	})
 }
 
-// --- Wire encoding: 4-byte big-endian length prefix + JSON body ---
+// --- Wire encoding ---
+//
+// Wire format:
+//   [4-byte big-endian json_len]
+//   [4-byte big-endian bin_len]
+//   [json_len bytes of JSON-encoded Message (without Bin)]
+//   [bin_len bytes of raw binary trailer]
+//
+// Either length may be zero. Total wire size is 8 + json_len + bin_len.
 
-const maxMessageSize = 128 * 1024 * 1024 // 128 MB (generous for file chunks)
+const maxMessageSize = 128 * 1024 * 1024 // 128 MB per side (chunks are 1 MB)
 
-// WriteMessage writes a length-prefixed JSON message to w.
+// WriteMessage writes a length-prefixed binary-friendly message to w.
+// Callers should pass a buffered writer when sending many small messages.
 func WriteMessage(w io.Writer, msg Message) error {
-	data, err := json.Marshal(msg)
+	jsonBytes, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("marshal message: %w", err)
 	}
-
-	length := uint32(len(data))
-	if err := binary.Write(w, binary.BigEndian, length); err != nil {
-		return fmt.Errorf("write length: %w", err)
+	var hdr [8]byte
+	binary.BigEndian.PutUint32(hdr[0:4], uint32(len(jsonBytes)))
+	binary.BigEndian.PutUint32(hdr[4:8], uint32(len(msg.Bin)))
+	if _, err := w.Write(hdr[:]); err != nil {
+		return fmt.Errorf("write header: %w", err)
 	}
-	if _, err := w.Write(data); err != nil {
-		return fmt.Errorf("write body: %w", err)
+	if _, err := w.Write(jsonBytes); err != nil {
+		return fmt.Errorf("write json: %w", err)
+	}
+	if len(msg.Bin) > 0 {
+		if _, err := w.Write(msg.Bin); err != nil {
+			return fmt.Errorf("write bin: %w", err)
+		}
 	}
 	return nil
 }
 
-// ReadMessage reads a length-prefixed JSON message from r.
+// ReadMessage reads one wire message from r.
 func ReadMessage(r io.Reader) (Message, error) {
-	var length uint32
-	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
+	var hdr [8]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
 		return Message{}, err
 	}
-	if length > maxMessageSize {
-		return Message{}, fmt.Errorf("message too large: %d bytes", length)
+	jsonLen := binary.BigEndian.Uint32(hdr[0:4])
+	binLen := binary.BigEndian.Uint32(hdr[4:8])
+	if jsonLen > maxMessageSize || binLen > maxMessageSize {
+		return Message{}, fmt.Errorf("message too large: json=%d bin=%d", jsonLen, binLen)
 	}
-
-	data := make([]byte, length)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return Message{}, fmt.Errorf("read body: %w", err)
+	jsonBytes := make([]byte, jsonLen)
+	if _, err := io.ReadFull(r, jsonBytes); err != nil {
+		return Message{}, fmt.Errorf("read json: %w", err)
 	}
-
 	var msg Message
-	if err := json.Unmarshal(data, &msg); err != nil {
-		return Message{}, fmt.Errorf("unmarshal message: %w", err)
+	if err := json.Unmarshal(jsonBytes, &msg); err != nil {
+		return Message{}, fmt.Errorf("unmarshal: %w", err)
+	}
+	if binLen > 0 {
+		msg.Bin = make([]byte, binLen)
+		if _, err := io.ReadFull(r, msg.Bin); err != nil {
+			return Message{}, fmt.Errorf("read bin: %w", err)
+		}
 	}
 	return msg, nil
 }
