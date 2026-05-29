@@ -426,15 +426,38 @@ func (s *Server) handleFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entries := make([]node.FolderFileEntry, 0, 16)
+	// Pipeline: as soon as a file finishes staging, hand it to the sender so
+	// peer transfer begins while the rest of the upload is still streaming in.
+	// Small buffer = flow control: if the network is slower than disk, the
+	// multipart read back-pressures and %TEMP% won't fill with the entire
+	// upload before any bytes leave the machine.
+	pending := make(chan node.FolderFileEntry, 2)
+	senderDone := make(chan struct{})
+	go func() {
+		defer close(senderDone)
+		defer os.RemoveAll(stageDir)
+		for e := range pending {
+			if err := s.node.SendFolder(peer, folderName, []node.FolderFileEntry{e}); err != nil {
+				fmt.Printf("[warn] web folder send to %s: %v\n", peer, err)
+			}
+			os.Remove(e.AbsPath)
+		}
+	}()
+
+	abort := func(status int, msg string) {
+		close(pending)
+		<-senderDone
+		http.Error(w, msg, status)
+	}
+
+	sawAny := false
 	for {
 		part, err := mr.NextPart()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			os.RemoveAll(stageDir)
-			http.Error(w, "read part: "+err.Error(), http.StatusBadRequest)
+			abort(http.StatusBadRequest, "read part: "+err.Error())
 			return
 		}
 		// FormName carries the file's relative path (e.g. "subdir/img.png").
@@ -442,48 +465,42 @@ func (s *Server) handleFolder(w http.ResponseWriter, r *http.Request) {
 		rel = filepath.ToSlash(filepath.Clean(rel))
 		if rel == "" || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
 			part.Close()
-			os.RemoveAll(stageDir)
-			http.Error(w, "invalid rel path: "+part.FormName(), http.StatusBadRequest)
+			abort(http.StatusBadRequest, "invalid rel path: "+part.FormName())
 			return
 		}
 		absPath := filepath.Join(stageDir, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(absPath), 0o750); err != nil {
 			part.Close()
-			os.RemoveAll(stageDir)
-			http.Error(w, "stage dir: "+err.Error(), http.StatusInternalServerError)
+			abort(http.StatusInternalServerError, "stage dir: "+err.Error())
 			return
 		}
 		dst, oerr := os.OpenFile(absPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if oerr != nil {
 			part.Close()
-			os.RemoveAll(stageDir)
-			http.Error(w, "stage file: "+oerr.Error(), http.StatusInternalServerError)
+			abort(http.StatusInternalServerError, "stage file: "+oerr.Error())
 			return
 		}
 		_, cerr := io.Copy(dst, part)
 		dst.Close()
 		part.Close()
 		if cerr != nil {
-			os.RemoveAll(stageDir)
-			http.Error(w, "write stage: "+cerr.Error(), http.StatusInternalServerError)
+			abort(http.StatusInternalServerError, "write stage: "+cerr.Error())
 			return
 		}
-		entries = append(entries, node.FolderFileEntry{AbsPath: absPath, RelPath: rel})
+		sawAny = true
+		// Blocks once the buffer is full — that's the back-pressure.
+		pending <- node.FolderFileEntry{AbsPath: absPath, RelPath: rel}
 	}
-	if len(entries) == 0 {
-		os.RemoveAll(stageDir)
+	close(pending)
+
+	if !sawAny {
+		<-senderDone
 		http.Error(w, "no files in folder upload", http.StatusBadRequest)
 		return
 	}
 
 	w.WriteHeader(http.StatusAccepted)
-
-	go func() {
-		defer os.RemoveAll(stageDir)
-		if err := s.node.SendFolder(peer, folderName, entries); err != nil {
-			fmt.Printf("[warn] web folder send to %s: %v\n", peer, err)
-		}
-	}()
+	// sender continues in background; it owns stageDir cleanup.
 }
 
 func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
