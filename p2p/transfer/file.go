@@ -19,19 +19,21 @@ import (
 	"p2p/protocol"
 )
 
-const chunkSize = 64 * 1024 // 64 KB per chunk
+const chunkSize = 1024 * 1024 // 1 MB per chunk
 
 // SendFunc is the signature for enqueuing a message to a specific peer.
 type SendFunc func(msg protocol.Message)
 
-// ProgressFunc is called periodically during transfers with the file name and
-// current percentage (0–100).  It may be nil.
-type ProgressFunc func(name string, pct float64)
+// ProgressFunc is called periodically during transfers with the file name,
+// bytes transferred so far, total size, and the remote peer address. It may
+// be nil.
+type ProgressFunc func(name string, sent, total int64, peerAddr string)
 
 // Send reads the file at path, announces it via file_meta, then streams
 // file_chunk messages using sendFn.  progressFn (may be nil) is called with
-// the current percentage after each chunk.
-func Send(path string, sendFn SendFunc, progressFn ProgressFunc) error {
+// the current byte count after each chunk; peerAddr is forwarded into it so
+// callers can attribute progress events to a peer.
+func Send(path, peerAddr string, sendFn SendFunc, progressFn ProgressFunc) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
@@ -91,7 +93,7 @@ func Send(path string, sendFn SendFunc, progressFn ProgressFunc) error {
 			}
 			fmt.Printf("\r[send] %s  %.1f%%", filepath.Base(path), pct)
 			if progressFn != nil {
-				progressFn(filepath.Base(path), pct)
+				progressFn(filepath.Base(path), sent, info.Size(), peerAddr)
 			}
 			index++
 			if final {
@@ -120,6 +122,7 @@ type session struct {
 	hash       hash.Hash  // running sha256 updated per chunk
 	received   int64
 	outPath    string // final destination path
+	peerAddr   string // sender address, surfaced via progressFn
 	mu         sync.Mutex
 	onComplete func(string)
 	progressFn ProgressFunc // may be nil
@@ -147,9 +150,11 @@ func NewReceiver(outDir string) *Receiver {
 // transfers begin (not thread-safe with active sessions).
 func (r *Receiver) SetProgressFunc(fn ProgressFunc) { r.progressFn = fn }
 
-// HandleMeta processes a file_meta payload (raw JSON).
-// onComplete is called with the final file path once all chunks have arrived.
-func (r *Receiver) HandleMeta(raw json.RawMessage, onComplete func(path string)) {
+// HandleMeta processes a file_meta payload (raw JSON). peerAddr identifies
+// the sender so the receive-side progress callback can attribute bytes to a
+// peer. onComplete is called with the final file path once all chunks have
+// arrived.
+func (r *Receiver) HandleMeta(raw json.RawMessage, peerAddr string, onComplete func(path string)) {
 	var meta protocol.FileMetaPayload
 	if err := json.Unmarshal(raw, &meta); err != nil {
 		fmt.Printf("[warn] bad file_meta: %v\n", err)
@@ -173,6 +178,7 @@ func (r *Receiver) HandleMeta(raw json.RawMessage, onComplete func(path string))
 		file:       f,
 		hash:       sha256.New(),
 		outPath:    outPath,
+		peerAddr:   peerAddr,
 		onComplete: onComplete,
 		progressFn: r.progressFn,
 	}
@@ -219,7 +225,7 @@ func (r *Receiver) HandleChunk(raw json.RawMessage) {
 	}
 	fmt.Printf("\r[recv] %s  %.1f%%", sess.meta.Name, pct)
 	if sess.progressFn != nil {
-		sess.progressFn(sess.meta.Name, pct)
+		sess.progressFn(sess.meta.Name, sess.received, sess.meta.Size, sess.peerAddr)
 	}
 
 	if chunk.Final {
@@ -266,9 +272,10 @@ func generateID() string {
 // --- Shared folder transfers ---
 
 // HandleFolderMeta processes a folder_file_meta payload. It creates a receive
-// session that streams chunks directly into folderDir/relPath.
+// session that streams chunks directly into folderDir/relPath. peerAddr is
+// the sender's address; it is forwarded to the receive-side progress callback.
 // onComplete is called with (folderName, relPath, absPath) once verified.
-func (r *Receiver) HandleFolderMeta(raw json.RawMessage, folderDir string, onComplete func(folderName, relPath, absPath string)) {
+func (r *Receiver) HandleFolderMeta(raw json.RawMessage, folderDir, peerAddr string, onComplete func(folderName, relPath, absPath string)) {
 	var meta protocol.FolderFileMetaPayload
 	if err := json.Unmarshal(raw, &meta); err != nil {
 		fmt.Printf("[warn] bad folder_file_meta: %v\n", err)
@@ -309,14 +316,16 @@ func (r *Receiver) HandleFolderMeta(raw json.RawMessage, folderDir string, onCom
 			Size:     meta.Size,
 			Checksum: meta.Checksum,
 		},
-		file:    f,
-		hash:    sha256.New(),
-		outPath: outPath,
+		file:     f,
+		hash:     sha256.New(),
+		outPath:  outPath,
+		peerAddr: peerAddr,
 		onComplete: func(path string) {
 			if onComplete != nil {
 				onComplete(meta.Folder, filepath.ToSlash(relPath), path)
 			}
 		},
+		progressFn: r.progressFn,
 	}
 	r.mu.Unlock()
 
@@ -326,7 +335,9 @@ func (r *Receiver) HandleFolderMeta(raw json.RawMessage, folderDir string, onCom
 // SendFolderFile reads absPath and sends it as a shared-folder file transfer.
 // relPath is forward-slash relative to the folder root. Chunks are sent as
 // ordinary MsgFileChunk messages (same ID-keyed routing as normal transfers).
-func SendFolderFile(folderName, relPath, absPath string, modTime int64, sendFn SendFunc) error {
+// progressFn (may be nil) is invoked per chunk with (relPath, sent, total,
+// peerAddr).
+func SendFolderFile(folderName, relPath, absPath string, modTime int64, peerAddr string, sendFn SendFunc, progressFn ProgressFunc) error {
 	f, err := os.Open(absPath)
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
@@ -380,6 +391,9 @@ func SendFolderFile(folderName, relPath, absPath string, modTime int64, sendFn S
 				return fmt.Errorf("build file_chunk: %w", err)
 			}
 			sendFn(chunkMsg)
+			if progressFn != nil {
+				progressFn(relPath, sent, info.Size(), peerAddr)
+			}
 			index++
 			if final {
 				break

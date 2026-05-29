@@ -97,7 +97,7 @@ func (n *Node) folderChangeLoop(sf *sharedFolder) {
 						continue
 					}
 					go func(pCopy *Peer, path, rel string, mt int64) {
-						if err := transfer.SendFolderFile(sf.name, rel, path, mt, pCopy.Send); err != nil {
+						if err := transfer.SendFolderFile(sf.name, rel, path, mt, pCopy.Addr, pCopy.Send, nil); err != nil {
 							fmt.Printf("[warn] folder send %s: %v\n", rel, err)
 						}
 					}(p, ch.AbsPath, ch.RelPath, modTime)
@@ -156,7 +156,7 @@ func (n *Node) sendFolderAll(sf *sharedFolder, p *Peer) {
 			return nil
 		}
 		go func(absPath, relPath string, mt int64) {
-			if err := transfer.SendFolderFile(sf.name, relPath, absPath, mt, p.Send); err != nil {
+			if err := transfer.SendFolderFile(sf.name, relPath, absPath, mt, p.Addr, p.Send, nil); err != nil {
 				fmt.Printf("[warn] folder initial sync %s: %v\n", relPath, err)
 			}
 		}(path, rel, info.ModTime().Unix())
@@ -182,20 +182,34 @@ func (n *Node) handleFolderAnnounce(p *Peer, msg protocol.Message) {
 }
 
 // handleFolderFileMeta processes an incoming folder_file_meta message.
-func (n *Node) handleFolderFileMeta(msg protocol.Message) {
+// If meta.Folder matches a shared folder on this node, the file is written
+// into that folder (live-sync path). Otherwise this is an ad-hoc folder
+// transfer and the file is dropped into downloads/<folder-name>/<relPath>.
+func (n *Node) handleFolderFileMeta(p *Peer, msg protocol.Message) {
 	var meta protocol.FolderFileMetaPayload
 	if err := json.Unmarshal(msg.Payload, &meta); err != nil {
 		return
 	}
-	sf, ok := n.folders[meta.Folder]
-	if !ok {
+	if sf, ok := n.folders[meta.Folder]; ok {
+		n.recv.HandleFolderMeta(msg.Payload, sf.dir, p.Addr, func(folderName, relPath, absPath string) {
+			// Suppress watcher re-broadcast for this freshly-written file.
+			sf.watcher.Refresh(relPath)
+			for _, fn := range n.onFolderChange {
+				fn(folderName, relPath, absPath, false)
+			}
+		})
 		return
 	}
-	n.recv.HandleFolderMeta(msg.Payload, sf.dir, func(folderName, relPath, absPath string) {
-		// Suppress watcher re-broadcast for this freshly-written file.
-		sf.watcher.Refresh(relPath)
-		for _, fn := range n.onFolderChange {
-			fn(folderName, relPath, absPath, false)
+	// Ad-hoc folder send: place files under downloads/<folder-name>/.
+	safeName := filepath.Base(filepath.Clean(meta.Folder))
+	if safeName == "" || safeName == "." || safeName == ".." {
+		fmt.Printf("[warn] unsafe folder name rejected: %q\n", meta.Folder)
+		return
+	}
+	dir := filepath.Join(n.cfg.DownloadsDir, safeName)
+	n.recv.HandleFolderMeta(msg.Payload, dir, p.Addr, func(_, _, absPath string) {
+		for _, fn := range n.onFile {
+			fn(absPath)
 		}
 	})
 }

@@ -112,8 +112,31 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
 .s-ext{fill:#484f58;text-anchor:middle;dominant-baseline:middle;font-size:9px;pointer-events:none}
 @keyframes pulse{0%{r:56;opacity:.25}70%{r:72;opacity:0}100%{r:72;opacity:0}}
 .s-pulse{animation:pulse 2.6s ease-out infinite;fill:none;stroke:#388bfd;stroke-width:1.5}
+.p-ring{fill:none;stroke:#3fb950;stroke-width:3;pointer-events:none;transition:stroke-dashoffset .15s linear}
 #empty-hint{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none;gap:6px;color:#21262d;font-size:14px}
 #empty-hint.hidden{display:none}
+
+/* ── peer click menu ── */
+#peer-menu{position:absolute;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:4px;display:none;z-index:10;box-shadow:0 4px 12px rgba(0,0,0,.4)}
+#peer-menu.visible{display:flex;flex-direction:column;gap:2px}
+#peer-menu button{background:transparent;border:none;color:#c9d1d9;padding:6px 14px;text-align:left;font-size:12px;cursor:pointer;border-radius:4px;font-family:inherit}
+#peer-menu button:hover{background:#21262d}
+#peer-menu .pm-title{font-size:10px;color:#6e7681;padding:3px 14px 1px;text-transform:uppercase;letter-spacing:.5px}
+
+/* ── transfers panel ── */
+#transfers-panel{border-top:1px solid #21262d;padding:6px 12px;flex-shrink:0;display:none;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto}
+#transfers-panel.visible{display:flex}
+#transfers-panel::-webkit-scrollbar{width:3px}
+#transfers-panel::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
+.xfer{font-size:11px;color:#c9d1d9}
+.xfer-row1{display:flex;gap:5px;align-items:center}
+.xfer-dir{color:#58a6ff;font-weight:700}
+.xfer-dir.recv{color:#3fb950}
+.xfer-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.xfer-stats{color:#8b949e;font-size:10px;flex-shrink:0}
+.xfer-bar{height:3px;background:#21262d;border-radius:2px;overflow:hidden;margin-top:2px}
+.xfer-bar-fill{height:100%;background:#1f6feb;transition:width .15s linear}
+.xfer.recv .xfer-bar-fill{background:#3fb950}
 </style>
 </head>
 <body>
@@ -152,10 +175,17 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
       <div class="sec-title">Send File</div>
       <select id="peer-sel"><option value="">- no peers -</option></select>
       <label id="drop-zone" for="file-input" tabindex="0" aria-label="Drop file or click to browse">
-        <span id="dz-text"><strong>Drop file here</strong> or click to browse</span>
+        <span id="dz-text"><strong>Drop file</strong>, click to browse, or click a peer</span>
         <input type="file" id="file-input" style="display:none" multiple>
       </label>
     </div>
+
+    <!-- hidden inputs triggered by peer click menu -->
+    <input type="file" id="peer-file-input" style="display:none" multiple>
+    <input type="file" id="peer-folder-input" style="display:none" webkitdirectory multiple>
+
+    <!-- transfers -->
+    <div id="transfers-panel"></div>
 
     <!-- received files -->
     <div id="files-panel">
@@ -180,6 +210,12 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
     </div>
 
   </div>
+</div>
+
+<div id="peer-menu" role="menu">
+  <div class="pm-title" id="pm-target">peer</div>
+  <button type="button" id="pm-file">Send file...</button>
+  <button type="button" id="pm-folder">Send folder...</button>
 </div>
 
 <script>
@@ -220,11 +256,21 @@ function render() {
   });
 
   // peer nodes
+  const RING_R = 44;
+  const RING_C = 2 * Math.PI * RING_R;
   for (const peer of peerList) {
     const g = document.createElementNS(NS,'g');
     g.setAttribute('class','p-group'+(peer.crypto?' enc':''));
     g.setAttribute('data-addr',peer.addr);
     g.appendChild(svgEl('circle',{class:'p-circle',cx:peer._x,cy:peer._y,r:40}));
+    // progress ring (hidden by default; updated by updateRing).
+    const ring = svgEl('circle',{
+      class:'p-ring',cx:peer._x,cy:peer._y,r:RING_R,
+      transform:`rotate(-90 ${peer._x} ${peer._y})`,
+      'stroke-dasharray':RING_C,
+      'stroke-dashoffset':RING_C,
+    });
+    g.appendChild(ring);
     const nt = svgEl('text',{class:'p-nick',x:peer._x,y:peer._y-10});
     nt.textContent = peer.nick||peer.addr;
     g.appendChild(nt);
@@ -245,10 +291,18 @@ function render() {
     g.addEventListener('dragover',e=>e.preventDefault());
     g.addEventListener('drop',e=>{
       e.preventDefault();dc=0;g.classList.remove('drag-on');
-      if(e.dataTransfer.files[0]) sendFile(peer.addr,e.dataTransfer.files[0]);
+      const fs=e.dataTransfer.files;
+      if(fs && fs.length) for(const f of fs) sendFile(peer.addr,f);
+    });
+    // click to open send menu
+    g.addEventListener('click',e=>{
+      e.stopPropagation();
+      openPeerMenu(peer.addr, peer.nick||peer.addr, e.clientX, e.clientY);
     });
     svg.appendChild(g);
   }
+  // restore any in-flight progress rings after re-render.
+  refreshAllRings();
 
   // self node
   const sg=document.createElementNS(NS,'g');
@@ -370,6 +424,68 @@ function sendFiles(files) {
   for(const f of files) sendFile(peer,f);
 }
 
+// ── send a whole folder ─────────────────────────────────────────────────────
+function sendFolder(peerAddr, files) {
+  if(!peerAddr){addNotif('Select a peer first',true);return;}
+  if(!files||!files.length){addNotif('Empty folder',true);return;}
+  // Derive top-level folder name from any file's webkitRelativePath.
+  const firstRel = files[0].webkitRelativePath || files[0].name;
+  const folderName = firstRel.split('/')[0] || 'folder';
+  addNotif(`Sending folder ${folderName} (${files.length} files)...`);
+  const fd = new FormData();
+  for(const f of files){
+    const rel = f.webkitRelativePath || f.name;
+    fd.append(rel, f, f.name);
+  }
+  const url = '/folder?peer=' + encodeURIComponent(peerAddr) + '&name=' + encodeURIComponent(folderName);
+  fetch(url,{method:'POST',body:fd})
+    .then(r=>r.ok?addNotif('Folder queued: '+folderName):r.text().then(t=>addNotif(t,true)))
+    .catch(e=>addNotif(String(e),true));
+}
+
+// ── peer click menu ─────────────────────────────────────────────────────────
+let _menuPeerAddr = '';
+function openPeerMenu(addr, label, x, y){
+  _menuPeerAddr = addr;
+  const m = document.getElementById('peer-menu');
+  document.getElementById('pm-target').textContent = 'Send to ' + label;
+  m.classList.add('visible');
+  // Position; clamp to viewport.
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const w = m.offsetWidth || 160, h = m.offsetHeight || 70;
+  m.style.left = Math.min(x, vw - w - 8) + 'px';
+  m.style.top  = Math.min(y, vh - h - 8) + 'px';
+}
+function closePeerMenu(){
+  document.getElementById('peer-menu').classList.remove('visible');
+  _menuPeerAddr = '';
+}
+document.addEventListener('click', closePeerMenu);
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closePeerMenu(); });
+document.getElementById('peer-menu').addEventListener('click', e=>e.stopPropagation());
+document.getElementById('pm-file').addEventListener('click', ()=>{
+  const inp=document.getElementById('peer-file-input');
+  inp.dataset.peer=_menuPeerAddr;
+  closePeerMenu();
+  inp.click();
+});
+document.getElementById('pm-folder').addEventListener('click', ()=>{
+  const inp=document.getElementById('peer-folder-input');
+  inp.dataset.peer=_menuPeerAddr;
+  closePeerMenu();
+  inp.click();
+});
+document.getElementById('peer-file-input').addEventListener('change', e=>{
+  const addr=e.target.dataset.peer;
+  for(const f of e.target.files) sendFile(addr,f);
+  e.target.value='';
+});
+document.getElementById('peer-folder-input').addEventListener('change', e=>{
+  const addr=e.target.dataset.peer;
+  sendFolder(addr, e.target.files);
+  e.target.value='';
+});
+
 // drop zone
 const dz=document.getElementById('drop-zone');
 dz.addEventListener('dragenter',e=>{e.preventDefault();dz.classList.add('hover');});
@@ -457,8 +573,121 @@ function connect() {
     folders.set(folder,sf);
     renderFolders();
   });
+  es.addEventListener('transfer_progress',e=>{
+    const d=JSON.parse(e.data);
+    updateTransferProgress(d.name, d.pct||0, !!d.recv, d.peer||'', d.bytes||0, d.total||0);
+  });
   es.onerror=()=>document.getElementById('status-dot').classList.add('off');
   es.onopen =()=>document.getElementById('status-dot').classList.remove('off');
+}
+
+// ── transfer progress: speed, ETA, ring, sidebar rows ──────────────────────
+const transfers = new Map(); // key → {name, recv, peer, pct, bytes, total, lastBytes, lastTs, bps, row}
+
+function transferKey(name, recv, peer){ return (recv?'r|':'s|') + peer + '|' + name; }
+
+function fmtBps(n){
+  if(!isFinite(n)||n<=0) return '— /s';
+  if(n<1024) return n.toFixed(0)+' B/s';
+  if(n<1048576) return (n/1024).toFixed(1)+' KB/s';
+  if(n<1073741824) return (n/1048576).toFixed(1)+' MB/s';
+  return (n/1073741824).toFixed(2)+' GB/s';
+}
+function fmtEta(sec){
+  if(!isFinite(sec)||sec<=0) return '—';
+  sec=Math.round(sec);
+  if(sec<60) return sec+'s';
+  if(sec<3600) return Math.floor(sec/60)+'m '+(sec%60)+'s';
+  return Math.floor(sec/3600)+'h '+Math.floor((sec%3600)/60)+'m';
+}
+
+function updateTransferProgress(name, pct, recv, peer, bytes, total){
+  const key = transferKey(name, recv, peer);
+  const now = performance.now();
+  let t = transfers.get(key);
+  if(!t){
+    t = {name, recv, peer, pct:0, bytes:0, total, lastBytes:0, lastTs:now, bps:0, row:null};
+    transfers.set(key, t);
+  }
+  // speed: exponential smoothing.
+  const dt = (now - t.lastTs) / 1000;
+  if(dt > 0.05){
+    const inst = (bytes - t.lastBytes) / dt;
+    t.bps = t.bps === 0 ? inst : (0.7*t.bps + 0.3*inst);
+    t.lastBytes = bytes;
+    t.lastTs = now;
+  }
+  t.pct = pct; t.bytes = bytes; t.total = total || t.total;
+
+  renderTransferRow(t, key);
+  updateRing(peer);
+
+  if(pct >= 100){
+    // brief grace so the user sees 100%, then remove.
+    setTimeout(()=>{
+      const cur = transfers.get(key);
+      if(cur && cur.row){ cur.row.remove(); }
+      transfers.delete(key);
+      updateRing(peer);
+      const panel=document.getElementById('transfers-panel');
+      if(!panel.children.length) panel.classList.remove('visible');
+    }, 800);
+  }
+}
+
+function renderTransferRow(t, key){
+  const panel = document.getElementById('transfers-panel');
+  panel.classList.add('visible');
+  if(!t.row){
+    const row = document.createElement('div');
+    row.className = 'xfer' + (t.recv?' recv':'');
+    row.dataset.key = key;
+    row.innerHTML =
+      '<div class="xfer-row1">'
+      + '<span class="xfer-dir'+(t.recv?' recv':'')+'">'+(t.recv?'↓':'↑')+'</span>'
+      + '<span class="xfer-name"></span>'
+      + '<span class="xfer-stats"></span>'
+      + '</div>'
+      + '<div class="xfer-bar"><div class="xfer-bar-fill"></div></div>';
+    panel.appendChild(row);
+    t.row = row;
+  }
+  const remaining = (t.total > 0 && t.bps > 0) ? (t.total - t.bytes) / t.bps : NaN;
+  t.row.querySelector('.xfer-name').textContent = t.name;
+  t.row.querySelector('.xfer-stats').textContent =
+    t.pct.toFixed(1)+'%  '+fmtBps(t.bps)+'  ETA '+fmtEta(remaining);
+  t.row.querySelector('.xfer-bar-fill').style.width = Math.min(100, t.pct).toFixed(1)+'%';
+}
+
+// Pick the highest-pct active transfer for the given peer and drive its ring.
+function updateRing(peer){
+  if(!peer) return;
+  let maxPct = 0, anyActive = false;
+  for(const t of transfers.values()){
+    if(t.peer === peer && t.pct < 100){
+      anyActive = true;
+      if(t.pct > maxPct) maxPct = t.pct;
+    }
+  }
+  const g = document.querySelector(`g.p-group[data-addr="${cssEscape(peer)}"]`);
+  if(!g) return;
+  const ring = g.querySelector('.p-ring');
+  if(!ring) return;
+  const c = parseFloat(ring.getAttribute('stroke-dasharray')) || 0;
+  if(!anyActive){
+    ring.setAttribute('stroke-dashoffset', c);
+    return;
+  }
+  ring.setAttribute('stroke-dashoffset', (c * (1 - maxPct/100)).toFixed(2));
+}
+function refreshAllRings(){
+  const seen = new Set();
+  for(const t of transfers.values()){
+    if(t.peer && !seen.has(t.peer)){ updateRing(t.peer); seen.add(t.peer); }
+  }
+}
+function cssEscape(s){
+  return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/(["\\\]\[])/g,'\\$1');
 }
 
 // ── shared folders ──────────────────────────────────────────────────────────

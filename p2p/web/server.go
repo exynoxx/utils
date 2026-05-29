@@ -114,11 +114,18 @@ func New(n *node.Node, downloadsDir string) *Server {
 		}
 	})
 
-	n.OnProgress(func(name string, pct float64, recv bool) {
+	n.OnProgress(func(name string, sent, total int64, recv bool, peerAddr string) {
+		var pct float64
+		if total > 0 {
+			pct = float64(sent) / float64(total) * 100
+		}
 		b, _ := json.Marshal(map[string]any{
-			"name": name,
-			"pct":  pct,
-			"recv": recv,
+			"name":  name,
+			"pct":   pct,
+			"recv":  recv,
+			"peer":  peerAddr,
+			"bytes": sent,
+			"total": total,
 		})
 		s.hub.broadcast("transfer_progress", b)
 	})
@@ -134,6 +141,7 @@ func (s *Server) ListenAndServe(addr string) error {
 	mux.HandleFunc("GET /state", s.handleState)
 	mux.HandleFunc("POST /chat", s.handleChat)
 	mux.HandleFunc("POST /file", s.handleFile)
+	mux.HandleFunc("POST /folder", s.handleFolder)
 	mux.HandleFunc("GET /files", s.handleFilesList)
 	mux.HandleFunc("GET /files/open", s.handleFileOpen)
 	mux.HandleFunc("GET /files/opendir", s.handleFileOpenDir)
@@ -322,21 +330,9 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := r.ParseMultipartForm(128 << 20); err != nil {
-		http.Error(w, "parse form: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	f, header, err := r.FormFile("file")
+	mr, err := r.MultipartReader()
 	if err != nil {
-		http.Error(w, "file field required", http.StatusBadRequest)
-		return
-	}
-	defer f.Close()
-
-	// Sanitise filename to prevent path traversal.
-	name := filepath.Base(header.Filename)
-	if name == "." || name == ".." || name == "" {
-		http.Error(w, "invalid filename", http.StatusBadRequest)
+		http.Error(w, "expected multipart body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -346,20 +342,53 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmpPath := filepath.Join(dir, name)
-	dst, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		os.RemoveAll(dir)
-		http.Error(w, "temp file: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if _, err := io.Copy(dst, f); err != nil {
+	var tmpPath, name string
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			os.RemoveAll(dir)
+			http.Error(w, "read part: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if part.FormName() != "file" {
+			part.Close()
+			continue
+		}
+		name = filepath.Base(part.FileName())
+		if name == "." || name == ".." || name == "" {
+			part.Close()
+			os.RemoveAll(dir)
+			http.Error(w, "invalid filename", http.StatusBadRequest)
+			return
+		}
+		tmpPath = filepath.Join(dir, name)
+		dst, oerr := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY, 0o600)
+		if oerr != nil {
+			part.Close()
+			os.RemoveAll(dir)
+			http.Error(w, "temp file: "+oerr.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Stream directly from request body to disk — no in-memory spool,
+		// no double-write through Go's multipart temp file.
+		_, cerr := io.Copy(dst, part)
 		dst.Close()
+		part.Close()
+		if cerr != nil {
+			os.RemoveAll(dir)
+			http.Error(w, "write temp: "+cerr.Error(), http.StatusInternalServerError)
+			return
+		}
+		break
+	}
+	if tmpPath == "" {
 		os.RemoveAll(dir)
-		http.Error(w, "write temp: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "file field required", http.StatusBadRequest)
 		return
 	}
-	dst.Close()
 
 	// Accepted: the actual send runs in the background so we don't block
 	// the browser waiting for a potentially long transfer.
@@ -369,6 +398,90 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		defer os.RemoveAll(dir)
 		if err := s.node.SendFile(peer, tmpPath); err != nil {
 			fmt.Printf("[warn] web file send to %s: %v\n", peer, err)
+		}
+	}()
+}
+
+func (s *Server) handleFolder(w http.ResponseWriter, r *http.Request) {
+	peer := r.URL.Query().Get("peer")
+	if peer == "" {
+		http.Error(w, "peer query param required", http.StatusBadRequest)
+		return
+	}
+	folderName := filepath.Base(filepath.Clean(r.URL.Query().Get("name")))
+	if folderName == "" || folderName == "." || folderName == ".." {
+		http.Error(w, "name query param required", http.StatusBadRequest)
+		return
+	}
+
+	mr, err := r.MultipartReader()
+	if err != nil {
+		http.Error(w, "expected multipart body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	stageDir, err := os.MkdirTemp("", "p2p-folder-*")
+	if err != nil {
+		http.Error(w, "temp dir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	entries := make([]node.FolderFileEntry, 0, 16)
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			os.RemoveAll(stageDir)
+			http.Error(w, "read part: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		// FormName carries the file's relative path (e.g. "subdir/img.png").
+		rel := strings.TrimPrefix(part.FormName(), folderName+"/")
+		rel = filepath.ToSlash(filepath.Clean(rel))
+		if rel == "" || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+			part.Close()
+			os.RemoveAll(stageDir)
+			http.Error(w, "invalid rel path: "+part.FormName(), http.StatusBadRequest)
+			return
+		}
+		absPath := filepath.Join(stageDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(absPath), 0o750); err != nil {
+			part.Close()
+			os.RemoveAll(stageDir)
+			http.Error(w, "stage dir: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		dst, oerr := os.OpenFile(absPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if oerr != nil {
+			part.Close()
+			os.RemoveAll(stageDir)
+			http.Error(w, "stage file: "+oerr.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, cerr := io.Copy(dst, part)
+		dst.Close()
+		part.Close()
+		if cerr != nil {
+			os.RemoveAll(stageDir)
+			http.Error(w, "write stage: "+cerr.Error(), http.StatusInternalServerError)
+			return
+		}
+		entries = append(entries, node.FolderFileEntry{AbsPath: absPath, RelPath: rel})
+	}
+	if len(entries) == 0 {
+		os.RemoveAll(stageDir)
+		http.Error(w, "no files in folder upload", http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+
+	go func() {
+		defer os.RemoveAll(stageDir)
+		if err := s.node.SendFolder(peer, folderName, entries); err != nil {
+			fmt.Printf("[warn] web folder send to %s: %v\n", peer, err)
 		}
 	}()
 }

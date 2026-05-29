@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -40,7 +41,7 @@ type Node struct {
 	onFile      []func(path string)
 	onPeer      []func(PeerInfo) // notified when a new peer connects
 	onPeerLeave []func(addr string) // notified when a peer disconnects
-	onProgress  []func(name string, pct float64, recv bool) // transfer progress
+	onProgress  []func(name string, sent, total int64, recv bool, peerAddr string) // transfer progress
 	onFolderChange []func(folderName, relPath, absPath string, deleted bool)
 	folders   map[string]*sharedFolder
 	closeOnce sync.Once
@@ -59,9 +60,9 @@ func New(cfg Config) (*Node, error) {
 		quit:  make(chan struct{}),
 	}
 	// Receiver progress feeds into node-level OnProgress callbacks.
-	n.recv.SetProgressFunc(transfer.ProgressFunc(func(name string, pct float64) {
+	n.recv.SetProgressFunc(transfer.ProgressFunc(func(name string, sent, total int64, peerAddr string) {
 		for _, fn := range n.onProgress {
-			fn(name, pct, true)
+			fn(name, sent, total, true, peerAddr)
 		}
 	}))
 	if cfg.Crypto {
@@ -94,13 +95,14 @@ func (n *Node) OnFolderChange(fn func(folderName, relPath, absPath string, delet
 }
 
 // OnProgress registers a callback invoked during file transfers with the
-// current percentage (0–100).  recv=true means we are receiving, false=sending.
-func (n *Node) OnProgress(fn func(name string, pct float64, recv bool)) {
+// current byte count, total size, and the peer involved. recv=true means we
+// are receiving, false=sending.
+func (n *Node) OnProgress(fn func(name string, sent, total int64, recv bool, peerAddr string)) {
 	n.onProgress = append(n.onProgress, fn)
 	// Wire new callback into receiver immediately so in-progress receives pick it up.
-	n.recv.SetProgressFunc(transfer.ProgressFunc(func(name string, pct float64) {
+	n.recv.SetProgressFunc(transfer.ProgressFunc(func(name string, sent, total int64, peerAddr string) {
 		for _, fn := range n.onProgress {
-			fn(name, pct, true)
+			fn(name, sent, total, true, peerAddr)
 		}
 	}))
 }
@@ -191,12 +193,47 @@ func (n *Node) SendFile(addr, path string) error {
 		return fmt.Errorf("peer %s not connected", addr)
 	}
 	name := filepath.Base(path)
-	progressFn := transfer.ProgressFunc(func(_ string, pct float64) {
+	progressFn := transfer.ProgressFunc(func(_ string, sent, total int64, peerAddr string) {
 		for _, fn := range n.onProgress {
-			fn(name, pct, false)
+			fn(name, sent, total, false, peerAddr)
 		}
 	})
-	return transfer.Send(path, p.Send, progressFn)
+	return transfer.Send(path, p.Addr, p.Send, progressFn)
+}
+
+// FolderFileEntry describes one file in an ad-hoc folder send.
+type FolderFileEntry struct {
+	AbsPath string
+	RelPath string // forward-slash relative path inside the folder
+	ModTime int64  // unix seconds; 0 to use the file's mtime
+}
+
+// SendFolder sends each entry to peer addr as a folder transfer, preserving
+// relative paths under folderName. The receiver places files into its
+// downloads/<folderName>/<relPath> (see node.handleFolderFileMeta).
+func (n *Node) SendFolder(addr, folderName string, entries []FolderFileEntry) error {
+	p := n.peers.Get(addr)
+	if p == nil {
+		return fmt.Errorf("peer %s not connected", addr)
+	}
+	progressFn := transfer.ProgressFunc(func(relPath string, sent, total int64, peerAddr string) {
+		name := folderName + "/" + relPath
+		for _, fn := range n.onProgress {
+			fn(name, sent, total, false, peerAddr)
+		}
+	})
+	for _, e := range entries {
+		mt := e.ModTime
+		if mt == 0 {
+			if info, err := os.Stat(e.AbsPath); err == nil {
+				mt = info.ModTime().Unix()
+			}
+		}
+		if err := transfer.SendFolderFile(folderName, e.RelPath, e.AbsPath, mt, p.Addr, p.Send, progressFn); err != nil {
+			return fmt.Errorf("send %s: %w", e.RelPath, err)
+		}
+	}
+	return nil
 }
 
 // Peers returns a snapshot of connected peer addresses and nicknames.
@@ -495,7 +532,7 @@ func (n *Node) handleMessage(p *Peer, msg protocol.Message) {
 	case protocol.MsgChat:
 		n.handleChat(msg)
 	case protocol.MsgFileMeta:
-		n.recv.HandleMeta(msg.Payload, func(path string) {
+		n.recv.HandleMeta(msg.Payload, p.Addr, func(path string) {
 			for _, fn := range n.onFile {
 				fn(path)
 			}
@@ -513,7 +550,7 @@ func (n *Node) handleMessage(p *Peer, msg protocol.Message) {
 	case protocol.MsgFolderAnnounce:
 		n.handleFolderAnnounce(p, msg)
 	case protocol.MsgFolderFileMeta:
-		n.handleFolderFileMeta(msg)
+		n.handleFolderFileMeta(p, msg)
 	case protocol.MsgFolderDelete:
 		n.handleFolderDelete(msg)
 	}
