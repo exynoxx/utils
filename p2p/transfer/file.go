@@ -97,6 +97,22 @@ func streamChunks(f *os.File, id string, total int64, displayName, peerAddr stri
 
 	index := 0
 	var sent int64
+	// Zero-byte files: emit one empty final chunk so the receiver sees Final
+	// and can close + finalise its session. Without this, the receive-side
+	// file handle would leak.
+	if total == 0 {
+		chunkMsg, err := protocol.NewMessageBin(protocol.MsgFileChunk, protocol.FileChunkPayload{
+			ID: id, Index: 0, Final: true,
+		}, nil)
+		if err != nil {
+			return "", fmt.Errorf("build empty final chunk: %w", err)
+		}
+		sendFn(chunkMsg)
+		if progressFn != nil {
+			progressFn(displayName, 0, 0, peerAddr)
+		}
+		return hex.EncodeToString(h.Sum(nil)), nil
+	}
 	for {
 		n, readErr := f.Read(buf)
 		if n > 0 {
