@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -8,7 +8,7 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
 
-/* â”€â”€ topbar â”€â”€ */
+/* -- topbar -- */
 #topbar{height:42px;background:#161b22;border-bottom:1px solid #21262d;display:flex;align-items:center;padding:0 14px;gap:10px;flex-shrink:0}
 .badge{font-size:11px;padding:2px 8px;border-radius:10px;font-weight:700}
 .badge-self{background:#1f3a5f;color:#79c0ff}
@@ -17,13 +17,21 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
 #status-dot.off{background:#484f58}
 #top-ext{font-size:11px;color:#6e7681}
 
-/* â”€â”€ layout â”€â”€ */
+/* -- layout -- */
 #main{flex:1;display:flex;min-height:0}
 #graph-wrap{flex:1;position:relative;overflow:hidden}
 #graph{position:absolute;inset:0;width:100%;height:100%;display:block}
 
-/* â”€â”€ sidebar â”€â”€ */
-#sidebar{width:310px;flex-shrink:0;border-left:1px solid #21262d;display:flex;flex-direction:column;background:#0d1117;overflow:hidden}
+/* -- sidebar -- */
+#sidebar{width:330px;flex-shrink:0;border-left:1px solid #21262d;display:flex;flex-direction:column;background:#0d1117;overflow:hidden}
+
+/* horizontal resize handle (between graph and sidebar) */
+#sidebar-resizer{width:5px;flex-shrink:0;cursor:col-resize;background:transparent;transition:background .12s}
+#sidebar-resizer:hover,#sidebar-resizer.drag{background:#30363d}
+
+/* vertical resize handle (between stacked sidebar sections) */
+.v-resizer{height:5px;flex-shrink:0;cursor:row-resize;background:transparent;transition:background .12s}
+.v-resizer:hover,.v-resizer.drag{background:#30363d}
 
 /* self panel */
 #self-panel{padding:8px 12px 7px;border-bottom:1px solid #21262d;flex-shrink:0}
@@ -31,7 +39,7 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
 #sp-sub{font-size:11px;color:#8b949e;margin-top:1px}
 
 /* chat log */
-#chat-log{flex:1;overflow-y:auto;padding:8px 12px;display:flex;flex-direction:column;gap:3px;min-height:0}
+#chat-log{flex:1 1 0;overflow-y:auto;padding:8px 12px;display:flex;flex-direction:column;gap:3px;min-height:60px}
 #chat-log::-webkit-scrollbar{width:3px}
 #chat-log::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
 .msg{font-size:12px;line-height:1.5;word-break:break-word}
@@ -44,37 +52,36 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
 /* section titles */
 .sec-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#6e7681;margin-bottom:5px}
 
-/* â”€â”€ send-file panel â”€â”€ */
-#send-panel{border-top:1px solid #21262d;padding:8px 12px;flex-shrink:0}
-#peer-sel{width:100%;background:#161b22;border:1px solid #30363d;color:#c9d1d9;border-radius:5px;padding:5px 8px;font-size:12px;outline:none;margin-bottom:6px;cursor:pointer}
-#peer-sel:focus{border-color:#388bfd}
-#peer-sel option{background:#161b22}
-#drop-zone{display:block;border:1.5px dashed #30363d;border-radius:6px;padding:8px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;user-select:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#drop-zone:hover,#drop-zone.hover{border-color:#388bfd;background:#0d2444}
-#drop-zone.ok{border-color:#3fb950;background:#0d2a1a}
-#dz-text{color:#8b949e;font-size:12px;line-height:1.3}
-#dz-text strong{color:#c9d1d9}
-#dz-hint{display:block;font-size:10px;color:#6e7681;margin-top:2px}
 .btn{border:none;border-radius:5px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:background .15s;line-height:1.5}
 .btn-ghost{background:#21262d;color:#c9d1d9}
 .btn-ghost:hover{background:#30363d}
 .btn-primary{background:#1f6feb;color:#fff}
 .btn-primary:hover{background:#388bfd}
 
-/* â”€â”€ files panel â”€â”€ */
-#files-panel{border-top:1px solid #21262d;padding:8px 12px 6px;flex-shrink:0;display:flex;flex-direction:column;max-height:176px}
-#files-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-shrink:0}
-#files-list{overflow-y:auto;flex:1}
-#files-list::-webkit-scrollbar{width:3px}
-#files-list::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
+/* -- per-peer area -- */
+#peers-area{flex:0 0 auto;height:240px;overflow-y:auto;border-top:1px solid #21262d;padding:8px 12px}
+#peers-area::-webkit-scrollbar{width:3px}
+#peers-area::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
+#peers-area .area-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.peer-sec{margin-bottom:10px}
+.peer-sec-hdr{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px}
+.peer-sec-hdr .nick{font-size:12px;font-weight:700;color:#79c0ff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.peer-sec-hdr .btn{padding:2px 8px;font-size:11px;flex-shrink:0}
+.peer-xfers{display:flex;flex-direction:column;gap:4px;margin-bottom:4px}
+.peer-files{display:flex;flex-direction:column}
+
+/* received file rows */
 .file-row{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:4px;cursor:pointer;font-size:12px;transition:background .1s}
 .file-row:hover{background:#161b22}
 .fi{font-size:13px;flex-shrink:0}
 .fn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c9d1d9}
 .fsz{color:#6e7681;font-size:10px;flex-shrink:0}
 .files-empty{color:#6e7681;font-size:11px;padding:4px 6px}
-/* ── shared folders panel ── */
-#folders-panel{border-top:1px solid #21262d;padding:8px 12px 6px;flex-shrink:0;display:flex;flex-direction:column;max-height:220px;display:none}
+
+/* -- shared folders panel -- */
+#folders-panel{border-top:1px solid #21262d;padding:8px 12px 6px;flex-shrink:0;flex-direction:column;height:180px;overflow-y:auto;display:none}
+#folders-panel::-webkit-scrollbar{width:3px}
+#folders-panel::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
 .folder-block{margin-bottom:6px}
 .folder-hdr{display:flex;align-items:center;gap:5px;margin-bottom:3px}
 .folder-icon{font-size:11px;color:#58a6ff}
@@ -82,19 +89,20 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
 .folder-files{overflow-y:auto;max-height:80px}
 .folder-files::-webkit-scrollbar{width:3px}
 .folder-files::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
-/* â”€â”€ notifs â”€â”€ */
+
+/* -- notifs -- */
 #notifs{padding:0 12px 3px;display:flex;flex-direction:column;gap:2px;flex-shrink:0}
 .notif{font-size:11px;padding:3px 8px;border-radius:4px;background:#161b22;border:1px solid #21262d;color:#8b949e;animation:fadein .2s}
 .notif.ok{border-color:#238636;color:#3fb950}
 .notif.err{border-color:#da3633;color:#f85149}
 @keyframes fadein{from{opacity:0;transform:translateY(3px)}to{opacity:1}}
 
-/* â”€â”€ chat input â”€â”€ */
+/* -- chat input -- */
 #chat-row{padding:8px 12px;border-top:1px solid #21262d;display:flex;gap:6px;flex-shrink:0}
 #chat-text{flex:1;background:#161b22;border:1px solid #30363d;color:#c9d1d9;border-radius:5px;padding:5px 9px;font-size:12px;outline:none}
 #chat-text:focus{border-color:#388bfd}
 
-/* â”€â”€ SVG graph â”€â”€ */
+/* -- SVG graph -- */
 .conn-line{stroke:#21262d;stroke-width:1.5;stroke-dasharray:5 4}
 .p-circle{fill:#161b22;stroke:#30363d;stroke-width:2;cursor:pointer;transition:stroke .15s,fill .15s}
 .p-group.enc .p-circle{stroke:#388bfd}
@@ -106,7 +114,7 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
 .p-group.drag-on .p-drop{display:block}
 .s-group.drag-on .s-circle{fill:#1a3050;stroke:#58a6ff;stroke-width:3}
 .s-group.drag-on .s-drop{display:block}
-.s-circle{fill:#1c2e4a;stroke:#388bfd;stroke-width:2}
+.s-circle{fill:#1c2e4a;stroke:#388bfd;stroke-width:2;cursor:pointer}
 .s-drop{fill:#58a6ff;text-anchor:middle;dominant-baseline:middle;font-size:10px;font-weight:700;pointer-events:none;display:none}
 .s-nick{fill:#c9d1d9;text-anchor:middle;dominant-baseline:middle;font-size:14px;font-weight:700;pointer-events:none}
 .s-addr{fill:#8b949e;text-anchor:middle;dominant-baseline:middle;font-size:9px;pointer-events:none}
@@ -117,18 +125,14 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
 #empty-hint{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none;gap:6px;color:#21262d;font-size:14px}
 #empty-hint.hidden{display:none}
 
-/* ── peer click menu ── */
+/* -- click menu (peers + self) -- */
 #peer-menu{position:absolute;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:4px;display:none;z-index:10;box-shadow:0 4px 12px rgba(0,0,0,.4)}
 #peer-menu.visible{display:flex;flex-direction:column;gap:2px}
 #peer-menu button{background:transparent;border:none;color:#c9d1d9;padding:6px 14px;text-align:left;font-size:12px;cursor:pointer;border-radius:4px;font-family:inherit}
 #peer-menu button:hover{background:#21262d}
 #peer-menu .pm-title{font-size:10px;color:#6e7681;padding:3px 14px 1px;text-transform:uppercase;letter-spacing:.5px}
 
-/* ── transfers panel ── */
-#transfers-panel{border-top:1px solid #21262d;padding:6px 12px;flex-shrink:0;display:none;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto}
-#transfers-panel.visible{display:flex}
-#transfers-panel::-webkit-scrollbar{width:3px}
-#transfers-panel::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
+/* -- transfer rows (now rendered inside peer sections) -- */
 .xfer{font-size:11px;color:#c9d1d9}
 .xfer-row1{display:flex;gap:5px;align-items:center}
 .xfer-dir{color:#58a6ff;font-weight:700}
@@ -162,6 +166,8 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
     </div>
   </div>
 
+  <div id="sidebar-resizer"></div>
+
   <div id="sidebar">
 
     <div id="self-panel">
@@ -171,32 +177,15 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
 
     <div id="chat-log"></div>
 
-    <!-- send file -->
-    <div id="send-panel">
-      <div class="sec-title">Send File</div>
-      <select id="peer-sel"><option value="">- no peers -</option></select>
-      <label id="drop-zone" for="file-input" tabindex="0" aria-label="Drop file or click to browse">
-        <span id="dz-text"><strong>Drop file</strong> or click to browse</span>
-        <span id="dz-hint">tip: click a peer to send</span>
-        <input type="file" id="file-input" style="display:none" multiple>
-      </label>
+    <div class="v-resizer" id="peers-resizer"></div>
+
+    <!-- per-peer received files + live transfers -->
+    <div id="peers-area">
+      <div class="area-title"><span class="sec-title" style="margin:0">Peers</span></div>
+      <div id="peers-body"><div class="files-empty">No active transfers yet</div></div>
     </div>
 
-    <!-- hidden inputs triggered by peer click menu -->
-    <input type="file" id="peer-file-input" style="display:none" multiple>
-    <input type="file" id="peer-folder-input" style="display:none" webkitdirectory multiple>
-
-    <!-- transfers -->
-    <div id="transfers-panel"></div>
-
-    <!-- received files -->
-    <div id="files-panel">
-      <div id="files-hdr">
-        <span class="sec-title" style="margin:0">Received Files</span>
-        <button class="btn btn-ghost" id="opendir-btn" type="button" style="padding:2px 8px;font-size:11px">Open folder</button>
-      </div>
-      <div id="files-list"><div class="files-empty">None yet</div></div>
-    </div>
+    <div class="v-resizer" id="folders-resizer" style="display:none"></div>
 
     <!-- shared folders -->
     <div id="folders-panel">
@@ -214,6 +203,10 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
   </div>
 </div>
 
+<!-- hidden inputs triggered by the click menu (peers + self) -->
+<input type="file" id="peer-file-input" style="display:none" multiple>
+<input type="file" id="peer-folder-input" style="display:none" webkitdirectory multiple>
+
 <div id="peer-menu" role="menu">
   <div class="pm-title" id="pm-target">peer</div>
   <button type="button" id="pm-file">Send file...</button>
@@ -223,12 +216,22 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
 <script>
 'use strict';
 
-// â”€â”€ state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-let self_ = {nick:'', addr:'', crypto:false, ext_addr:''};
-const peers = new Map(); // addr → PeerInfo
-const folders = new Map(); // name → {name, files[]}
+// special sentinel addr used by the self-node menu to mean "broadcast to all".
+const ALL = '*ALL*';
 
-// â”€â”€ SVG helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -- state --------------------------------------------------------------------
+let self_ = {nick:'', addr:'', crypto:false, ext_addr:''};
+const peers = new Map();   // addr -> PeerInfo
+const folders = new Map(); // name -> {name, files[]}
+// Per-peer sidebar UI state. addr -> {receivedFiles:[{name,size}]}
+const peerUI = new Map();
+function peerState(addr){
+  let s = peerUI.get(addr);
+  if(!s){ s = {receivedFiles:[]}; peerUI.set(addr, s); }
+  return s;
+}
+
+// -- SVG helpers --------------------------------------------------------------
 const NS = 'http://www.w3.org/2000/svg';
 function svgEl(tag, attrs={}) {
   const el = document.createElementNS(NS, tag);
@@ -236,7 +239,7 @@ function svgEl(tag, attrs={}) {
   return el;
 }
 
-// â”€â”€ render graph â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -- render graph -------------------------------------------------------------
 function render() {
   const svg = document.getElementById('graph');
   const W = svg.clientWidth||600, H = svg.clientHeight||600;
@@ -339,10 +342,16 @@ function render() {
     if(!peers.size){addNotif('No peers connected',true);return;}
     for(const f of files) for(const addr of peers.keys()) sendFile(addr,f);
   });
+  // click self = open broadcast menu
+  sg.addEventListener('click',e=>{
+    e.stopPropagation();
+    if(!peers.size){addNotif('No peers connected',true);return;}
+    openPeerMenu(ALL, 'all peers', e.clientX, e.clientY);
+  });
   svg.appendChild(sg);
 }
 
-// â”€â”€ top bar & self panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -- top bar & self panel -----------------------------------------------------
 function updateTopBar() {
   document.getElementById('top-nick').textContent = self_.nick||'-';
   document.getElementById('top-addr').textContent = self_.addr||'';
@@ -356,28 +365,7 @@ function updateTopBar() {
   document.getElementById('status-dot').classList.remove('off');
 }
 
-// â”€â”€ peer selector â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function updatePeerSel() {
-  const sel=document.getElementById('peer-sel');
-  const cur=sel.value;
-  sel.innerHTML='';
-  if (!peers.size) {
-    sel.innerHTML='<option value="">- no peers -</option>';
-    return;
-  }
-  const ph=document.createElement('option');
-  ph.value=''; ph.textContent='- select peer -';
-  sel.appendChild(ph);
-  for (const [addr,p] of peers) {
-    const o=document.createElement('option');
-    o.value=addr; o.textContent=`${p.nick} (${addr})`;
-    if(addr===cur) o.selected=true;
-    sel.appendChild(o);
-  }
-  if(peers.size===1&&!cur) sel.value=[...peers.keys()][0];
-}
-
-// â”€â”€ chat â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -- chat ---------------------------------------------------------------------
 function addChat(nick,text,t,mine=false) {
   const log=document.getElementById('chat-log');
   const d=document.createElement('div');
@@ -412,7 +400,7 @@ function sendChat() {
   addChat(self_.nick||'you',text,now(),true);
 }
 
-// â”€â”€ file send â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -- file/folder send ---------------------------------------------------------
 function sendFile(peerAddr,file) {
   if(!peerAddr){addNotif('Select a peer first',true);return;}
   addNotif(`Sending ${file.name}...`);
@@ -421,12 +409,8 @@ function sendFile(peerAddr,file) {
     .then(r=>r.ok?addNotif('Sent: '+file.name):r.text().then(t=>addNotif(t,true)))
     .catch(e=>addNotif(String(e),true));
 }
-function sendFiles(files) {
-  const peer=document.getElementById('peer-sel').value;
-  for(const f of files) sendFile(peer,f);
-}
 
-// ── send a whole folder ─────────────────────────────────────────────────────
+// send a whole folder to a single peer.
 function sendFolder(peerAddr, files) {
   if(!peerAddr){addNotif('Select a peer first',true);return;}
   if(!files||!files.length){addNotif('Empty folder',true);return;}
@@ -445,7 +429,7 @@ function sendFolder(peerAddr, files) {
     .catch(e=>addNotif(String(e),true));
 }
 
-// ── peer click menu ─────────────────────────────────────────────────────────
+// -- click menu (peers + self broadcast) --------------------------------------
 let _menuPeerAddr = '';
 function openPeerMenu(addr, label, x, y){
   _menuPeerAddr = addr;
@@ -479,72 +463,101 @@ document.getElementById('pm-folder').addEventListener('click', ()=>{
 });
 document.getElementById('peer-file-input').addEventListener('change', e=>{
   const addr=e.target.dataset.peer;
-  for(const f of e.target.files) sendFile(addr,f);
+  const targets = addr===ALL ? [...peers.keys()] : [addr];
+  for(const a of targets) for(const f of e.target.files) sendFile(a,f);
   e.target.value='';
 });
 document.getElementById('peer-folder-input').addEventListener('change', e=>{
   const addr=e.target.dataset.peer;
-  sendFolder(addr, e.target.files);
+  const targets = addr===ALL ? [...peers.keys()] : [addr];
+  for(const a of targets) sendFolder(a, e.target.files);
   e.target.value='';
 });
 
-// drop zone
-const dz=document.getElementById('drop-zone');
-dz.addEventListener('dragenter',e=>{e.preventDefault();dz.classList.add('hover');});
-dz.addEventListener('dragleave',e=>{if(!dz.contains(e.relatedTarget))dz.classList.remove('hover');});
-dz.addEventListener('dragover',e=>e.preventDefault());
-dz.addEventListener('drop',e=>{
-  e.preventDefault();dz.classList.remove('hover');
-  if(e.dataTransfer.files.length) sendFiles(e.dataTransfer.files);
-});
-document.getElementById('file-input').addEventListener('change',e=>{
-  sendFiles(e.target.files); e.target.value='';
-});
-
-// â”€â”€ file list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function loadFiles() {
-  fetch('/files').then(r=>r.json()).then(renderFiles).catch(()=>{});
+// -- per-peer sidebar sections ------------------------------------------------
+// Rebuilds #peers-body from `peers`, `peerUI` and `transfers`. Idempotent and
+// decoupled from the SVG render() (which wipes only the <svg>). Re-binds each
+// active transfer's `t.row` to the freshly created DOM node.
+function peerHasActivity(addr){
+  if(peerState(addr).receivedFiles.length) return true;
+  for(const t of transfers.values()) if(t.peer===addr) return true;
+  return false;
 }
-function renderFiles(files) {
-  const list=document.getElementById('files-list');
-  if(!files||!files.length){
-    list.innerHTML='<div class="files-empty">None yet</div>';
+function renderPeerSections(){
+  const body=document.getElementById('peers-body');
+  const shown=[...peers.values()].filter(p=>peerHasActivity(p.addr));
+  if(!shown.length){
+    body.innerHTML='<div class="files-empty">No active transfers yet</div>';
     return;
   }
-  list.innerHTML='';
-  for(const f of files) {
-    const row=document.createElement('div');
-    row.className='file-row'; row.title='Open '+f.name;
-    row.innerHTML=`<span class="fi">${fileIcon(f.name)}</span><span class="fn">${esc(f.name)}</span><span class="fsz">${fmtBytes(f.size)}</span>`;
-    row.addEventListener('click',()=>fetch('/files/open?name='+encodeURIComponent(f.name)).catch(()=>{}));
-    list.appendChild(row);
+  body.innerHTML='';
+  for(const p of shown){
+    const addr=p.addr;
+    const sec=document.createElement('div');
+    sec.className='peer-sec';
+    sec.dataset.addr=addr;
+
+    const hdr=document.createElement('div');
+    hdr.className='peer-sec-hdr';
+    const nk=document.createElement('span');
+    nk.className='nick'; nk.textContent=p.nick||addr; nk.title=addr;
+    const open=document.createElement('button');
+    open.className='btn btn-ghost'; open.type='button'; open.textContent='Open folder';
+    open.addEventListener('click',()=>fetch('/files/opendir').catch(()=>{}));
+    hdr.appendChild(nk); hdr.appendChild(open);
+    sec.appendChild(hdr);
+
+    // active transfers for this peer
+    const xf=document.createElement('div');
+    xf.className='peer-xfers';
+    for(const [key,t] of transfers){
+      if(t.peer!==addr) continue;
+      const row=createTransferRow(t,key);
+      t.row=row;
+      updateTransferRow(t);
+      xf.appendChild(row);
+    }
+    sec.appendChild(xf);
+
+    // received files for this peer
+    const fl=document.createElement('div');
+    fl.className='peer-files';
+    const rf=peerState(addr).receivedFiles;
+    for(const f of rf){
+      const row=document.createElement('div');
+      row.className='file-row'; row.title='Open '+f.name;
+      row.innerHTML=`<span class="fi">${fileIcon(f.name)}</span><span class="fn">${esc(f.name)}</span><span class="fsz">${fmtBytes(f.size)}</span>`;
+      row.addEventListener('click',()=>fetch('/files/open?name='+encodeURIComponent(f.name)).catch(()=>{}));
+      fl.appendChild(row);
+    }
+    sec.appendChild(fl);
+
+    body.appendChild(sec);
   }
 }
-document.getElementById('opendir-btn').addEventListener('click',()=>{
-  fetch('/files/opendir').catch(()=>{});
-});
 
-// â”€â”€ SSE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -- SSE ----------------------------------------------------------------------
 function connect() {
   const es=new EventSource('/events');
   es.addEventListener('init',e=>{
-    const {self:s,peers:ps}=JSON.parse(e.data);
-    self_=s; peers.clear();
-    (ps||[]).forEach(p=>peers.set(p.addr,p));
+    const data=JSON.parse(e.data);
+    self_=data.self; peers.clear();
+    (data.peers||[]).forEach(p=>peers.set(p.addr,p));
     folders.clear();
-    (JSON.parse(e.data).folders||[]).forEach(f=>{folders.set(f.name,f);});
-    updateTopBar(); updatePeerSel(); requestAnimationFrame(render);
+    (data.folders||[]).forEach(f=>{folders.set(f.name,f);});
+    updateTopBar(); requestAnimationFrame(render);
+    renderPeerSections();
     renderFolders();
   });
   es.addEventListener('peer_join',e=>{
     const p=JSON.parse(e.data);
-    peers.set(p.addr,p); updatePeerSel(); render();
+    peers.set(p.addr,p); render(); renderPeerSections();
     addSys(`+ ${p.nick} (${p.addr})${p.crypto?' [enc]':''} connected`);
   });
   es.addEventListener('peer_leave',e=>{
     const {addr}=JSON.parse(e.data);
-    const p=peers.get(addr); peers.delete(addr);
-    updatePeerSel(); render();
+    const p=peers.get(addr); peers.delete(addr); peerUI.delete(addr);
+    render(); renderPeerSections();
     addSys(`- ${p?p.nick:addr} disconnected`);
   });
   es.addEventListener('chat',e=>{
@@ -556,9 +569,6 @@ function connect() {
     const name=path.replace(/\\/g,'/').split('/').pop();
     addNotif('Received: '+name);
     addSys('File received -> '+name);
-  });
-  es.addEventListener('files_changed',e=>{
-    renderFiles(JSON.parse(e.data));
   });
   es.addEventListener('folder_change',e=>{
     const {folder,rel_path}=JSON.parse(e.data);
@@ -583,20 +593,20 @@ function connect() {
   es.onopen =()=>document.getElementById('status-dot').classList.remove('off');
 }
 
-// ── transfer progress: speed, ETA, ring, sidebar rows ──────────────────────
-const transfers = new Map(); // key → {name, recv, peer, pct, bytes, total, lastBytes, lastTs, bps, row}
+// -- transfer progress: speed, ETA, ring, per-peer rows -----------------------
+const transfers = new Map(); // key -> {name, recv, peer, pct, bytes, total, lastBytes, lastTs, bps, recorded, row}
 
 function transferKey(name, recv, peer){ return (recv?'r|':'s|') + peer + '|' + name; }
 
 function fmtBps(n){
-  if(!isFinite(n)||n<=0) return '— /s';
+  if(!isFinite(n)||n<=0) return '- /s';
   if(n<1024) return n.toFixed(0)+' B/s';
   if(n<1048576) return (n/1024).toFixed(1)+' KB/s';
   if(n<1073741824) return (n/1048576).toFixed(1)+' MB/s';
   return (n/1073741824).toFixed(2)+' GB/s';
 }
 function fmtEta(sec){
-  if(!isFinite(sec)||sec<=0) return '—';
+  if(!isFinite(sec)||sec<=0) return '-';
   sec=Math.round(sec);
   if(sec<60) return sec+'s';
   if(sec<3600) return Math.floor(sec/60)+'m '+(sec%60)+'s';
@@ -605,55 +615,70 @@ function fmtEta(sec){
 
 function updateTransferProgress(name, pct, recv, peer, bytes, total){
   const key = transferKey(name, recv, peer);
-  const now = performance.now();
+  const nowt = performance.now();
   let t = transfers.get(key);
-  if(!t){
-    t = {name, recv, peer, pct:0, bytes:0, total, lastBytes:0, lastTs:now, bps:0, row:null};
+  const isNew = !t;
+  if(isNew){
+    t = {name, recv, peer, pct:0, bytes:0, total, lastBytes:0, lastTs:nowt, bps:0, recorded:false, row:null};
     transfers.set(key, t);
   }
   // speed: exponential smoothing.
-  const dt = (now - t.lastTs) / 1000;
+  const dt = (nowt - t.lastTs) / 1000;
   if(dt > 0.05){
     const inst = (bytes - t.lastBytes) / dt;
     t.bps = t.bps === 0 ? inst : (0.7*t.bps + 0.3*inst);
     t.lastBytes = bytes;
-    t.lastTs = now;
+    t.lastTs = nowt;
   }
+  const justDone = pct >= 100 && t.pct < 100;
   t.pct = pct; t.bytes = bytes; t.total = total || t.total;
 
-  renderTransferRow(t, key);
+  // Record a completed receive into the peer's file list (synchronously, before
+  // the row is removed) so the section never momentarily empties.
+  if(recv && pct >= 100 && !t.recorded){
+    t.recorded = true;
+    const rf = peerState(peer).receivedFiles;
+    if(!rf.some(f=>f.name===t.name)) rf.unshift({name:t.name, size:t.total||t.bytes});
+  }
+
+  if(isNew || justDone){
+    // Structural change: (re)build the owning peer's section, then update row.
+    renderPeerSections();
+  } else if(t.row){
+    // Pure progress tick: cheap targeted update (keeps bar animation smooth).
+    updateTransferRow(t);
+  } else {
+    renderPeerSections();
+  }
   updateRing(peer);
 
   if(pct >= 100){
-    // brief grace so the user sees 100%, then remove.
+    // brief grace so the user sees 100%, then remove the in-transit row.
     setTimeout(()=>{
       const cur = transfers.get(key);
-      if(cur && cur.row){ cur.row.remove(); }
-      transfers.delete(key);
+      if(cur){ transfers.delete(key); }
       updateRing(peer);
-      const panel=document.getElementById('transfers-panel');
-      if(!panel.children.length) panel.classList.remove('visible');
+      renderPeerSections();
     }, 800);
   }
 }
 
-function renderTransferRow(t, key){
-  const panel = document.getElementById('transfers-panel');
-  panel.classList.add('visible');
-  if(!t.row){
-    const row = document.createElement('div');
-    row.className = 'xfer' + (t.recv?' recv':'');
-    row.dataset.key = key;
-    row.innerHTML =
-      '<div class="xfer-row1">'
-      + '<span class="xfer-dir'+(t.recv?' recv':'')+'">'+(t.recv?'↓':'↑')+'</span>'
-      + '<span class="xfer-name"></span>'
-      + '<span class="xfer-stats"></span>'
-      + '</div>'
-      + '<div class="xfer-bar"><div class="xfer-bar-fill"></div></div>';
-    panel.appendChild(row);
-    t.row = row;
-  }
+// Build a fresh transfer row element (not attached). Caller sets t.row + appends.
+function createTransferRow(t, key){
+  const row = document.createElement('div');
+  row.className = 'xfer' + (t.recv?' recv':'');
+  row.dataset.key = key;
+  row.innerHTML =
+    '<div class="xfer-row1">'
+    + '<span class="xfer-dir'+(t.recv?' recv':'')+'">'+(t.recv?'↓':'↑')+'</span>'
+    + '<span class="xfer-name"></span>'
+    + '<span class="xfer-stats"></span>'
+    + '</div>'
+    + '<div class="xfer-bar"><div class="xfer-bar-fill"></div></div>';
+  return row;
+}
+function updateTransferRow(t){
+  if(!t.row) return;
   const remaining = (t.total > 0 && t.bps > 0) ? (t.total - t.bytes) / t.bps : NaN;
   t.row.querySelector('.xfer-name').textContent = t.name;
   t.row.querySelector('.xfer-stats').textContent =
@@ -692,12 +717,18 @@ function cssEscape(s){
   return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/(["\\\]\[])/g,'\\$1');
 }
 
-// ── shared folders ──────────────────────────────────────────────────────────
+// -- shared folders -----------------------------------------------------------
 function renderFolders() {
   const panel=document.getElementById('folders-panel');
+  const resizer=document.getElementById('folders-resizer');
   const body=document.getElementById('folders-body');
-  if(!folders.size){panel.style.display='none';return;}
+  if(!folders.size){
+    panel.style.display='none';
+    resizer.style.display='none';
+    return;
+  }
   panel.style.display='flex';
+  resizer.style.display='';
   body.innerHTML='';
   for(const [name,sf] of folders){
     const block=document.createElement('div');
@@ -723,7 +754,61 @@ function renderFolders() {
   }
 }
 
-// â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -- resizing (sidebar width + section heights; not persisted) ----------------
+function clamp(v,lo,hi){ return Math.max(lo, Math.min(hi, v)); }
+
+(function initHResize(){
+  const handle=document.getElementById('sidebar-resizer');
+  const sidebar=document.getElementById('sidebar');
+  let startX=0, startW=0, dragging=false;
+  handle.addEventListener('mousedown',e=>{
+    e.preventDefault();
+    dragging=true; startX=e.clientX; startW=sidebar.offsetWidth;
+    handle.classList.add('drag'); document.body.style.userSelect='none';
+  });
+  document.addEventListener('mousemove',e=>{
+    if(!dragging) return;
+    const w=clamp(startW + (startX - e.clientX), 220, window.innerWidth-220);
+    sidebar.style.width=w+'px';
+    clearTimeout(rt); rt=setTimeout(render,16);
+  });
+  document.addEventListener('mouseup',()=>{
+    if(!dragging) return;
+    dragging=false; handle.classList.remove('drag'); document.body.style.userSelect='';
+    render();
+  });
+})();
+
+// Each handle resizes the section directly below it; #chat-log (flex:1) absorbs
+// the remainder. min 80px for the resized section, and keep chat-log usable.
+function makeVResize(handleId, sectionId){
+  const handle=document.getElementById(handleId);
+  const section=document.getElementById(sectionId);
+  const chat=document.getElementById('chat-log');
+  let startY=0, startH=0, dragging=false;
+  handle.addEventListener('mousedown',e=>{
+    e.preventDefault();
+    dragging=true; startY=e.clientY; startH=section.offsetHeight;
+    handle.classList.add('drag'); document.body.style.userSelect='none';
+  });
+  document.addEventListener('mousemove',e=>{
+    if(!dragging) return;
+    const delta=e.clientY-startY;
+    // dragging down shrinks the section below (gives space to chat-log above).
+    let h=startH - delta;
+    const maxH = section.offsetHeight + chat.offsetHeight - 60; // keep chat >= 60
+    h=clamp(h, 80, Math.max(80, maxH));
+    section.style.height=h+'px';
+  });
+  document.addEventListener('mouseup',()=>{
+    if(!dragging) return;
+    dragging=false; handle.classList.remove('drag'); document.body.style.userSelect='';
+  });
+}
+makeVResize('peers-resizer','peers-area');
+makeVResize('folders-resizer','folders-panel');
+
+// -- helpers ------------------------------------------------------------------
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function now(){const d=new Date();return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');}
 function fmtBytes(n){if(n<1024)return n+' B';if(n<1048576)return(n/1024).toFixed(1)+' KB';return(n/1048576).toFixed(1)+' MB';}
