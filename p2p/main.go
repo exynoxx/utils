@@ -21,6 +21,7 @@ func main() {
 	lan := flag.Bool("lan", true, "enable mDNS LAN auto-discovery")
 	relay := flag.String("relay", "", "comma-separated static relay multiaddrs (optional)")
 	share := flag.String("share", "", "comma-separated shared folder names (e.g. docs,photos)")
+	announce := flag.String("announce", "", "public IP (or ip:port) to advertise as a dialable address (full-cone NAT)")
 	flag.Parse()
 
 	cfg := node.Config{
@@ -31,6 +32,7 @@ func main() {
 		Relays:        splitList(*relay),
 		SharedFolders: splitList(*share),
 		LAN:           *lan,
+		Announce:      strings.TrimSpace(*announce),
 	}
 
 	n, err := node.New(cfg)
@@ -58,13 +60,12 @@ func main() {
 	}
 	fmt.Printf("└─────────────────────────────────────┘\n")
 
-	// Print fully-qualified dialable addresses so a peer can copy one as a
-	// --bootstrap value. (Public/relay addresses appear once discovered.)
-	fmt.Println("\n  share one of these as a bootstrap address:")
-	for _, a := range n.P2pAddrs() {
-		fmt.Printf("    %s\n", a)
+	// Print the single best dialable address so a peer can copy it as a
+	// --bootstrap value. (A public address appears once discovered, or
+	// immediately when --announce is set; otherwise this is a LAN address.)
+	if best := n.BestShareAddr(); best != "" {
+		fmt.Printf("\n  ► copy this to connect from another PC:\n    %s\n\n", best)
 	}
-	fmt.Println()
 
 	if *uiPort > 0 {
 		addr := fmt.Sprintf(":%d", *uiPort)

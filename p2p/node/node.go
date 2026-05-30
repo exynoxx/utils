@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +45,7 @@ type Config struct {
 	Relays        []string // static relay multiaddrs (optional)
 	SharedFolders []string // names of folders to sync with peers
 	LAN           bool     // enable mDNS LAN discovery
+	Announce      string   // public IP (or ip:port) to advertise as dialable, e.g. "203.0.113.4"
 }
 
 // Node is the central P2P actor. It owns the libp2p host, the peer store, and
@@ -66,6 +70,9 @@ type Node struct {
 	relayMu    sync.Mutex
 	relayCands map[peer.ID]peer.AddrInfo // candidate relays surfaced to AutoRelay
 
+	announceMu sync.RWMutex
+	announce   string // public IP (or ip:port) advertised as a dialable address
+
 	ctx       context.Context
 	cancel    context.CancelFunc
 	closeOnce sync.Once
@@ -83,6 +90,7 @@ func New(cfg Config) (*Node, error) {
 		peers:      newPeerStore(),
 		recv:       transfer.NewReceiver(cfg.DownloadsDir),
 		relayCands: make(map[peer.ID]peer.AddrInfo),
+		announce:   strings.TrimSpace(cfg.Announce),
 		ctx:        ctx,
 		cancel:     cancel,
 		quit:       make(chan struct{}),
@@ -135,6 +143,7 @@ func (n *Node) buildHost() (host.Host, error) {
 	}
 	return libp2p.New(
 		libp2p.ListenAddrStrings(listen...),
+		libp2p.AddrsFactory(n.addrsFactory),
 		libp2p.NATPortMap(),
 		libp2p.EnableNATService(),
 		libp2p.EnableHolePunching(),
@@ -143,6 +152,87 @@ func (n *Node) buildHost() (host.Host, error) {
 		libp2p.EnableAutoRelayWithPeerSource(n.relaySource),
 	)
 }
+
+// addrsFactory augments libp2p's self-reported addresses with the manually
+// announced public address (if set). On a full-cone NAT the user knows their
+// public IP, so advertising /ip4/<public>/tcp/<port> makes the copy-pasted
+// share address directly dialable from across the internet without relying on
+// UPnP or AutoNAT having discovered it. The factory is consulted on every
+// host.Addrs() call, so SetAnnounce takes effect immediately.
+func (n *Node) addrsFactory(addrs []ma.Multiaddr) []ma.Multiaddr {
+	extra := n.announceAddrs()
+	if len(extra) == 0 {
+		return addrs
+	}
+	out := append([]ma.Multiaddr(nil), addrs...)
+	for _, e := range extra {
+		dup := false
+		for _, a := range out {
+			if a.Equal(e) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// announceAddrs builds the TCP+QUIC multiaddrs for the announced public IP,
+// defaulting the port to the listen port when none is given. Returns nil when
+// no (valid) announce address is configured.
+func (n *Node) announceAddrs() []ma.Multiaddr {
+	ann := n.getAnnounce()
+	if ann == "" {
+		return nil
+	}
+	host, port := ann, n.cfg.ListenPort
+	if h, p, err := net.SplitHostPort(ann); err == nil {
+		host = h
+		if pp, err := strconv.Atoi(p); err == nil {
+			port = pp
+		}
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil
+	}
+	proto := "ip4"
+	if ip.To4() == nil {
+		proto = "ip6"
+	}
+	var out []ma.Multiaddr
+	for _, s := range []string{
+		fmt.Sprintf("/%s/%s/tcp/%d", proto, host, port),
+		fmt.Sprintf("/%s/%s/udp/%d/quic-v1", proto, host, port),
+	} {
+		if m, err := ma.NewMultiaddr(s); err == nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// getAnnounce returns the currently announced public address (empty if unset).
+func (n *Node) getAnnounce() string {
+	n.announceMu.RLock()
+	defer n.announceMu.RUnlock()
+	return n.announce
+}
+
+// SetAnnounce updates the announced public address at runtime. Pass "" to clear
+// it. The change is reflected immediately in P2pAddrs/ShareAddrs and propagates
+// to peers on the next peer-list gossip.
+func (n *Node) SetAnnounce(addr string) {
+	n.announceMu.Lock()
+	n.announce = strings.TrimSpace(addr)
+	n.announceMu.Unlock()
+}
+
+// AnnounceAddr returns the configured public address override (empty if unset).
+func (n *Node) AnnounceAddr() string { return n.getAnnounce() }
 
 // relaySource implements autorelay.PeerSource: it yields known relay candidates
 // (static relays plus connected peers with public addresses) and then closes
@@ -272,6 +362,64 @@ func (n *Node) P2pAddrs() []string {
 		out = append(out, a.String())
 	}
 	return out
+}
+
+// ShareAddrs returns this node's dialable /p2p addresses ordered for sharing:
+// the manually announced address first (the user explicitly set it as their
+// reachable public IP), then any auto-discovered public addresses, then private
+// LAN, then link-local, then loopback. The first entry is the best one to hand
+// to a peer across the internet.
+func (n *Node) ShareAddrs() []string {
+	addrs := n.P2pAddrs()
+	// Set of announced IPs (without /p2p) so we can rank them top regardless of
+	// whether the IP falls in a range manet considers "public".
+	announced := make(map[string]bool)
+	for _, a := range n.announceAddrs() {
+		if ip, err := manet.ToIP(a); err == nil {
+			announced[ip.String()] = true
+		}
+	}
+	rank := func(s string) int {
+		m, err := ma.NewMultiaddr(s)
+		if err != nil {
+			return 5
+		}
+		if ip, err := manet.ToIP(m); err == nil && announced[ip.String()] {
+			return 0
+		}
+		switch {
+		case manet.IsPublicAddr(m):
+			return 1
+		case manet.IsIPLoopback(m):
+			return 4
+		case manet.IsIP6LinkLocal(m) || isIP4LinkLocal(m):
+			return 3
+		default:
+			return 2 // private LAN (10/8, 192.168/16, 172.16/12, etc.)
+		}
+	}
+	sort.SliceStable(addrs, func(i, j int) bool { return rank(addrs[i]) < rank(addrs[j]) })
+	return addrs
+}
+
+// isIP4LinkLocal reports whether m carries an IPv4 link-local (169.254/16)
+// address — the APIPA range that is never useful to share.
+func isIP4LinkLocal(m ma.Multiaddr) bool {
+	ip, err := manet.ToIP(m)
+	if err != nil {
+		return false
+	}
+	v4 := ip.To4()
+	return v4 != nil && v4[0] == 169 && v4[1] == 254
+}
+
+// BestShareAddr returns the single most-dialable address (the first ShareAddrs
+// entry), or "" if the node has no addresses yet.
+func (n *Node) BestShareAddr() string {
+	if a := n.ShareAddrs(); len(a) > 0 {
+		return a[0]
+	}
+	return ""
 }
 
 // Start registers the stream handler, wires connection notifications, starts

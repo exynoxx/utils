@@ -33,6 +33,17 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
 .v-resizer{height:5px;flex-shrink:0;cursor:row-resize;background:transparent;transition:background .12s}
 .v-resizer:hover,.v-resizer.drag{background:#30363d}
 
+/* connect panel */
+#connect-panel{padding:8px 12px;border-bottom:1px solid #21262d;flex-shrink:0;display:flex;flex-direction:column;gap:6px}
+.cp-row{display:flex;align-items:center;gap:6px}
+.cp-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#6e7681;flex:1}
+.cp-addr{display:block;background:#161b22;border:1px solid #21262d;border-radius:5px;padding:5px 8px;font-family:ui-monospace,Consolas,monospace;font-size:11px;color:#79c0ff;word-break:break-all;cursor:pointer;line-height:1.4}
+.cp-addr:hover{border-color:#30363d}
+.cp-addr.empty{color:#6e7681;cursor:default}
+.cp-input{flex:1;min-width:0;background:#161b22;border:1px solid #30363d;color:#c9d1d9;border-radius:5px;padding:5px 9px;font-size:12px;outline:none}
+.cp-input:focus{border-color:#388bfd}
+.cp-row .btn{flex-shrink:0}
+
 /* self panel */
 #self-panel{padding:8px 12px 7px;border-bottom:1px solid #21262d;flex-shrink:0}
 #sp-nick{font-size:14px;font-weight:700;color:#c9d1d9}
@@ -162,13 +173,30 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
     <svg id="graph" xmlns="http://www.w3.org/2000/svg"></svg>
     <div id="empty-hint">
       <span>No peers connected</span>
-      <span style="font-size:12px;color:#30363d">Use <code style="color:#388bfd">--bootstrap</code> or /connect in CLI</span>
+      <span style="font-size:12px;color:#30363d">Paste a peer's address in the <code style="color:#388bfd">Connect</code> box →</span>
     </div>
   </div>
 
   <div id="sidebar-resizer"></div>
 
   <div id="sidebar">
+
+    <div id="connect-panel">
+      <div class="cp-row">
+        <span class="cp-label">Your address — share to connect</span>
+        <button class="btn btn-ghost" id="copy-addr" title="Copy">Copy</button>
+      </div>
+      <code id="my-addr" class="cp-addr empty" title="Click to copy">waiting for address…</code>
+      <div class="cp-row">
+        <input id="announce-ip" class="cp-input" placeholder="public IP (full-cone NAT)" autocomplete="off" spellcheck="false">
+        <button class="btn btn-ghost" id="detect-ip" title="Detect public IP">Detect</button>
+        <button class="btn btn-ghost" id="set-ip">Set</button>
+      </div>
+      <div class="cp-row">
+        <input id="connect-addr" class="cp-input" placeholder="paste peer address, then Connect" autocomplete="off" spellcheck="false">
+        <button class="btn btn-primary" id="connect-btn">Connect</button>
+      </div>
+    </div>
 
     <div id="self-panel">
       <div id="sp-nick">-</div>
@@ -220,7 +248,7 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
 const ALL = '*ALL*';
 
 // -- state --------------------------------------------------------------------
-let self_ = {nick:'', addr:'', crypto:false, ext_addr:''};
+let self_ = {nick:'', addr:'', crypto:false, ext_addr:'', share_addr:'', share_addrs:[], announce:''};
 const peers = new Map();   // addr -> PeerInfo
 const folders = new Map(); // name -> {name, files[]}
 // Per-peer sidebar UI state. addr -> {receivedFiles:[{name,size}]}
@@ -267,6 +295,7 @@ function render() {
     const g = document.createElementNS(NS,'g');
     g.setAttribute('class','p-group'+(peer.crypto?' enc':''));
     g.setAttribute('data-addr',peer.addr);
+    const ttl=svgEl('title'); ttl.textContent=peer.addr; g.appendChild(ttl);
     g.appendChild(svgEl('circle',{class:'p-circle',cx:peer._x,cy:peer._y,r:40}));
     // progress ring (hidden by default; updated by updateRing).
     const ring = svgEl('circle',{
@@ -277,10 +306,10 @@ function render() {
     });
     g.appendChild(ring);
     const nt = svgEl('text',{class:'p-nick',x:peer._x,y:peer._y-10});
-    nt.textContent = peer.nick||peer.addr;
+    nt.textContent = peerLabel(peer);
     g.appendChild(nt);
     const at = svgEl('text',{class:'p-addr',x:peer._x,y:peer._y+10});
-    at.textContent = peer.addr;
+    at.textContent = shortName(peer.addr);
     g.appendChild(at);
     if (peer.crypto) {
       const lk=svgEl('text',{class:'p-lock',x:peer._x+26,y:peer._y-26});
@@ -314,15 +343,10 @@ function render() {
   sg.setAttribute('class','s-group');
   sg.appendChild(svgEl('circle',{class:'s-pulse',cx,cy,r:56}));
   sg.appendChild(svgEl('circle',{class:'s-circle',cx,cy,r:52}));
-  const extShown = !!self_.ext_addr;
-  const sn=svgEl('text',{class:'s-nick',x:cx,y:cy-(extShown?14:10)});
+  const sn=svgEl('text',{class:'s-nick',x:cx,y:cy-8});
   sn.textContent=self_.nick||'you'; sg.appendChild(sn);
-  const sa=svgEl('text',{class:'s-addr',x:cx,y:cy+(extShown?2:10)});
-  sa.textContent=self_.addr||''; sg.appendChild(sa);
-  if (extShown) {
-    const se=svgEl('text',{class:'s-ext',x:cx,y:cy+12});
-    se.textContent='ext: '+self_.ext_addr; sg.appendChild(se);
-  }
+  const sa=svgEl('text',{class:'s-addr',x:cx,y:cy+10});
+  sa.textContent=shortName(self_.share_addr||self_.addr); sg.appendChild(sa);
   if (self_.crypto) {
     const lk=svgEl('text',{class:'p-lock',x:cx+35,y:cy-35,'font-size':'13'});
     lk.textContent='[enc]'; sg.appendChild(lk);
@@ -353,16 +377,86 @@ function render() {
 
 // -- top bar & self panel -----------------------------------------------------
 function updateTopBar() {
+  const me = shortName(self_.share_addr||self_.addr);
   document.getElementById('top-nick').textContent = self_.nick||'-';
-  document.getElementById('top-addr').textContent = self_.addr||'';
-  const xe=document.getElementById('top-ext');
-  xe.textContent = self_.ext_addr ? 'ext: '+self_.ext_addr : '';
+  document.getElementById('top-addr').textContent = me;
+  document.getElementById('top-ext').textContent = '';
   document.getElementById('top-crypto').style.display = self_.crypto ? '' : 'none';
   document.getElementById('sp-nick').textContent = self_.nick||'-';
-  const sub = [self_.addr||'-'];
-  if (self_.ext_addr) sub.push('ext: '+self_.ext_addr);
-  document.getElementById('sp-sub').textContent = sub.join('  |  ');
+  document.getElementById('sp-sub').textContent = me;
   document.getElementById('status-dot').classList.remove('off');
+  updateConnectPanel();
+}
+
+// -- connect panel ------------------------------------------------------------
+function updateConnectPanel() {
+  const el = document.getElementById('my-addr');
+  const addr = self_.share_addr || '';
+  if (addr) {
+    el.textContent = addr;
+    el.title = 'Click to copy';
+    el.classList.remove('empty');
+  } else {
+    el.textContent = 'waiting for address…';
+    el.title = '';
+    el.classList.add('empty');
+  }
+  // Don't clobber the field while the user is editing it.
+  const ai = document.getElementById('announce-ip');
+  if (document.activeElement !== ai) ai.value = self_.announce || '';
+}
+
+async function copyText(text) {
+  if (!text) return false;
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch (_) {
+    // Fallback for non-secure contexts.
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select();
+    let ok=false; try { ok=document.execCommand('copy'); } catch(_){}
+    ta.remove(); return ok;
+  }
+}
+
+document.getElementById('copy-addr').addEventListener('click', copyMyAddr);
+document.getElementById('my-addr').addEventListener('click', copyMyAddr);
+async function copyMyAddr() {
+  if (!self_.share_addr) { addNotif('No address yet', true); return; }
+  addNotif(await copyText(self_.share_addr) ? 'Address copied' : 'Copy failed', !self_.share_addr);
+}
+
+document.getElementById('set-ip').addEventListener('click', setAnnounce);
+document.getElementById('announce-ip').addEventListener('keydown', e=>{
+  if (e.key==='Enter'){ e.preventDefault(); setAnnounce(); }
+});
+function setAnnounce() {
+  const ip = document.getElementById('announce-ip').value.trim();
+  fetch('/announce',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip})})
+    .then(r=>r.ok?addNotif(ip?('Announcing '+ip):'Public IP cleared'):r.text().then(t=>addNotif(t,true)))
+    .catch(e=>addNotif(String(e),true));
+}
+
+document.getElementById('detect-ip').addEventListener('click', ()=>{
+  addNotif('Detecting public IP…');
+  fetch('/pubip')
+    .then(r=>r.ok?r.json():r.text().then(t=>Promise.reject(t)))
+    .then(d=>{ document.getElementById('announce-ip').value = d.ip||''; addNotif('Detected '+(d.ip||'?')); })
+    .catch(e=>addNotif('Detect failed: '+e, true));
+});
+
+document.getElementById('connect-btn').addEventListener('click', doConnect);
+document.getElementById('connect-addr').addEventListener('keydown', e=>{
+  if (e.key==='Enter'){ e.preventDefault(); doConnect(); }
+});
+function doConnect() {
+  const inp = document.getElementById('connect-addr');
+  const addr = inp.value.trim();
+  if (!addr) { addNotif('Paste a peer address first', true); return; }
+  addNotif('Connecting…');
+  fetch('/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addr})})
+    .then(r=>{ if(r.ok){ inp.value=''; addNotif('Connecting to peer…'); } else return r.text().then(t=>addNotif('Connect failed: '+t,true)); })
+    .catch(e=>addNotif(String(e),true));
 }
 
 // -- chat ---------------------------------------------------------------------
@@ -500,7 +594,7 @@ function renderPeerSections(){
     const hdr=document.createElement('div');
     hdr.className='peer-sec-hdr';
     const nk=document.createElement('span');
-    nk.className='nick'; nk.textContent=p.nick||addr; nk.title=addr;
+    nk.className='nick'; nk.textContent=peerLabel(p); nk.title=addr;
     const open=document.createElement('button');
     open.className='btn btn-ghost'; open.type='button'; open.textContent='Open folder';
     open.addEventListener('click',()=>fetch('/files/opendir').catch(()=>{}));
@@ -549,16 +643,19 @@ function connect() {
     renderPeerSections();
     renderFolders();
   });
+  es.addEventListener('self',e=>{
+    self_=JSON.parse(e.data); updateTopBar(); render();
+  });
   es.addEventListener('peer_join',e=>{
     const p=JSON.parse(e.data);
     peers.set(p.addr,p); render(); renderPeerSections();
-    addSys(`+ ${p.nick} (${p.addr})${p.crypto?' [enc]':''} connected`);
+    addSys(`+ ${peerLabel(p)}${p.crypto?' [enc]':''} connected`);
   });
   es.addEventListener('peer_leave',e=>{
     const {addr}=JSON.parse(e.data);
     const p=peers.get(addr); peers.delete(addr); peerUI.delete(addr);
     render(); renderPeerSections();
-    addSys(`- ${p?p.nick:addr} disconnected`);
+    addSys(`- ${p?peerLabel(p):shortName(addr)} disconnected`);
   });
   es.addEventListener('chat',e=>{
     const {nick,text,time}=JSON.parse(e.data);
@@ -807,6 +904,31 @@ function makeVResize(handleId, sectionId){
 }
 makeVResize('peers-resizer','peers-area');
 makeVResize('folders-resizer','folders-panel');
+
+// -- short memorable peer names ----------------------------------------------
+// Peers auto-discover, so the raw peer ID is noise. We derive a stable, short
+// "adjective-animal" label from the ID (deterministic: same peer → same name
+// everywhere, every session). The full ID stays available as a hover tooltip.
+const NAME_ADJ=['swift','brave','calm','bright','bold','keen','wise','warm','cool','neat',
+  'quick','lucky','jolly','noble','merry','sly','spry','witty','sunny','glad',
+  'fuzzy','zesty','crisp','vivid','plucky','snug','dapper','breezy','mellow','peppy'];
+const NAME_ANI=['fox','owl','wolf','bear','hawk','lynx','otter','crow','seal','deer',
+  'moth','newt','toad','wren','finch','crab','mole','vole','ibex','koala',
+  'puma','swan','heron','raven','stoat','quail','gecko','panda','bison','egret'];
+// Extract the /p2p/<id> tail from a multiaddr, or return the input unchanged
+// (peer.addr is already a bare peer ID).
+function peerIdOf(s){const m=/\/p2p\/([^/]+)/.exec(String(s||''));return m?m[1]:String(s||'');}
+function shortName(addr){
+  const id=peerIdOf(addr);
+  if(!id) return 'peer';
+  let h=2166136261>>>0;                      // FNV-1a over the peer ID
+  for(let i=0;i<id.length;i++){h^=id.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}
+  const a=NAME_ADJ[h%NAME_ADJ.length];
+  const b=NAME_ANI[Math.floor(h/NAME_ADJ.length)%NAME_ANI.length];
+  return a+'-'+b;
+}
+// Display label for a peer: its chosen nick if any, else a memorable name.
+function peerLabel(p){return (p&&p.nick)?p.nick:shortName(p?p.addr:'');}
 
 // -- helpers ------------------------------------------------------------------
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
