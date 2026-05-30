@@ -11,6 +11,23 @@ file transfer, folder sync, browser UI, CLI — is original code layered on top.
 
 ---
 
+## Features
+
+- **Peer-to-peer over the LAN** — no central server, no registration, no accounts.
+- **Zero-config auto-discovery** — peers on the same network find and dial each other automatically via mDNS.
+- **Always encrypted & authenticated** — every connection uses a Noise / TLS 1.3 handshake; peer IDs prevent impersonation.
+- **Ephemeral identity** — a fresh key pair and peer ID per startup; nothing persisted to disk.
+- **Group chat** — broadcast text to all connected peers, with nicks and timestamps.
+- **Direct file transfer** — send a file to one peer (CLI or drag-and-drop), or broadcast to everyone.
+- **Checksum-verified transfers** — files stream in 1 MB chunks and are validated with SHA-256; corrupt files are rejected.
+- **Shared folder sync** — keep named folders in sync across peers, with change detection, deletions, last-write-wins, and path-traversal protection.
+- **Browser UI** — live network graph, real-time chat, downloads list, shared-folder views, and toast notifications via Server-Sent Events.
+- **Phone sharing** — a mobile web page to send files to the PC and receive files pushed from it; phones appear in the graph.
+- **Self-healing mesh** — periodic peer-list gossip grows the swarm and lets late joiners catch up.
+- **Dual interface** — full-featured CLI and browser UI available simultaneously.
+
+---
+
 ## Table of Contents
 
 1. [How it works](#how-it-works)
