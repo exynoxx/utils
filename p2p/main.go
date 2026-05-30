@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"strings"
 
@@ -66,6 +67,16 @@ func main() {
 	}
 	fmt.Println()
 
+	// Phone sharing: print a LAN URL the user can type into a phone browser.
+	if *uiPort > 0 {
+		if ip := lanIP(); ip != "" {
+			fmt.Println("  share files with your phone — open this in the phone's browser:")
+			fmt.Printf("    http://%s:%d/phone\n\n", ip, *uiPort)
+		} else {
+			fmt.Print("  (no LAN IP detected — phone sharing needs the PC on a local network)\n\n")
+		}
+	}
+
 	if *uiPort > 0 {
 		addr := fmt.Sprintf(":%d", *uiPort)
 		srv := web.New(n, *downloadsDir)
@@ -105,6 +116,37 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// lanIP returns the PC's primary LAN IPv4 address, suitable for a phone on the
+// same network to connect to. It first asks the OS which source address would
+// be used to reach a public host (no packets are sent — UDP "connect" only
+// selects a route), then falls back to scanning interfaces for a private IPv4
+// if that fails (e.g. no default route). Returns "" if none is found.
+func lanIP() string {
+	if conn, err := net.Dial("udp", "8.8.8.8:80"); err == nil {
+		defer conn.Close()
+		if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+			if ip := addr.IP.To4(); ip != nil && !ip.IsLoopback() {
+				return ip.String()
+			}
+		}
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip := ipnet.IP.To4()
+		if ip != nil && !ip.IsLoopback() && ip.IsPrivate() {
+			return ip.String()
+		}
+	}
+	return ""
 }
 
 func truncate(s string, n int) string {

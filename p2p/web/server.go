@@ -25,6 +25,9 @@ import (
 //go:embed ui.html
 var uiHTML []byte
 
+//go:embed phone.html
+var phoneHTML []byte
+
 // sseHub fans out SSE messages to all connected browser clients.
 type sseHub struct {
 	mu      sync.Mutex
@@ -137,14 +140,17 @@ func New(n *node.Node, downloadsDir string) *Server {
 func (s *Server) ListenAndServe(addr string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleUI)
+	mux.HandleFunc("GET /phone", s.handlePhoneUI)
 	mux.HandleFunc("GET /events", s.handleSSE)
 	mux.HandleFunc("GET /state", s.handleState)
 	mux.HandleFunc("POST /chat", s.handleChat)
 	mux.HandleFunc("POST /file", s.handleFile)
 	mux.HandleFunc("POST /folder", s.handleFolder)
+	mux.HandleFunc("POST /upload", s.handleUpload)
 	mux.HandleFunc("GET /files", s.handleFilesList)
 	mux.HandleFunc("GET /files/open", s.handleFileOpen)
 	mux.HandleFunc("GET /files/opendir", s.handleFileOpenDir)
+	mux.HandleFunc("GET /files/download", s.handleFileDownload)
 	mux.HandleFunc("GET /folders", s.handleFoldersList)
 	return http.ListenAndServe(addr, mux)
 }
@@ -265,6 +271,13 @@ func mustJSON(v any) json.RawMessage {
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(uiHTML)
+}
+
+// handlePhoneUI serves the mobile-friendly page used to send files to / grab
+// files from this PC over the LAN.
+func (s *Server) handlePhoneUI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(phoneHTML)
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
@@ -503,6 +516,90 @@ func (s *Server) handleFolder(w http.ResponseWriter, r *http.Request) {
 	// sender continues in background; it owns stageDir cleanup.
 }
 
+// handleUpload receives files sent from a phone (or any browser) over the LAN
+// and writes them straight into the downloads directory — no p2p hop. Multiple
+// "file" parts may be sent in one request. On a name clash the new file gets a
+// " (n)" suffix so nothing is overwritten. Each saved file is announced over SSE
+// so the desktop UI and any open phone pages refresh live.
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	mr, err := r.MultipartReader()
+	if err != nil {
+		http.Error(w, "expected multipart body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := os.MkdirAll(s.downloadsDir, 0o750); err != nil {
+		http.Error(w, "downloads dir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	saved := 0
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			http.Error(w, "read part: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if part.FormName() != "file" {
+			part.Close()
+			continue
+		}
+		name := filepath.Base(part.FileName())
+		if name == "." || name == ".." || name == "" {
+			part.Close()
+			http.Error(w, "invalid filename", http.StatusBadRequest)
+			return
+		}
+		dstPath := uniquePath(s.downloadsDir, name)
+		dst, oerr := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+		if oerr != nil {
+			part.Close()
+			http.Error(w, "create file: "+oerr.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, cerr := io.Copy(dst, part)
+		dst.Close()
+		part.Close()
+		if cerr != nil {
+			os.Remove(dstPath)
+			http.Error(w, "write file: "+cerr.Error(), http.StatusInternalServerError)
+			return
+		}
+		saved++
+		// Announce the new file the same way received p2p files are announced.
+		b, _ := json.Marshal(map[string]string{"path": dstPath})
+		s.hub.broadcast("file_done", b)
+	}
+
+	if saved == 0 {
+		http.Error(w, "file field required", http.StatusBadRequest)
+		return
+	}
+	if fl, err := s.fileListJSON(); err == nil {
+		s.hub.broadcast("files_changed", fl)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// uniquePath returns a path inside dir for name that does not yet exist,
+// inserting " (n)" before the extension on collision (e.g. "img (1).jpg").
+func uniquePath(dir, name string) string {
+	candidate := filepath.Join(dir, name)
+	if _, err := os.Stat(candidate); os.IsNotExist(err) {
+		return candidate
+	}
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	for i := 1; ; i++ {
+		candidate = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", base, i, ext))
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate
+		}
+	}
+}
+
 func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 	b, err := s.fileListJSON()
 	if err != nil {
@@ -532,6 +629,30 @@ func (s *Server) handleFileOpen(w http.ResponseWriter, r *http.Request) {
 	}
 	openPath(abs)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleFileDownload streams a received file's bytes to the client (e.g. a
+// phone browser) as an attachment. Range requests are supported via ServeFile,
+// so large files and video scrubbing work on mobile.
+func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
+	name := filepath.Base(r.URL.Query().Get("name"))
+	if name == "" || name == "." || name == ".." {
+		http.Error(w, "invalid name", http.StatusBadRequest)
+		return
+	}
+	abs := filepath.Join(s.downloadsDir, name)
+	// Verify the resolved path is still inside downloadsDir.
+	rel, err := filepath.Rel(s.downloadsDir, abs)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	if fi, err := os.Stat(abs); err != nil || fi.IsDir() {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+	http.ServeFile(w, r, abs)
 }
 
 func (s *Server) handleFileOpenDir(w http.ResponseWriter, r *http.Request) {
