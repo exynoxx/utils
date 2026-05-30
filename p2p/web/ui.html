@@ -123,6 +123,9 @@ body{background:#0d1117;color:#c9d1d9;font-family:'Segoe UI',system-ui,sans-seri
 .p-drop{fill:#3fb950;text-anchor:middle;dominant-baseline:middle;font-size:10px;font-weight:700;pointer-events:none;display:none}
 .p-group.drag-on .p-circle{fill:#0d2a1a;stroke:#3fb950;stroke-width:3}
 .p-group.drag-on .p-drop{display:block}
+.p-group.phone .p-circle{stroke:#a371f7}
+.p-group.phone.drag-on .p-circle{fill:#241a36;stroke:#bc8cff;stroke-width:3}
+.p-glyph{text-anchor:middle;dominant-baseline:middle;font-size:20px;pointer-events:none}
 .s-group.drag-on .s-circle{fill:#1a3050;stroke:#58a6ff;stroke-width:3}
 .s-group.drag-on .s-drop{display:block}
 .s-circle{fill:#1c2e4a;stroke:#388bfd;stroke-width:2;cursor:pointer}
@@ -250,6 +253,7 @@ const ALL = '*ALL*';
 // -- state --------------------------------------------------------------------
 let self_ = {nick:'', addr:'', crypto:false, ext_addr:'', share_addr:'', share_addrs:[], announce:''};
 const peers = new Map();   // addr -> PeerInfo
+const phonesMap = new Map(); // id -> {id, name}  (browsers on the /phone page)
 const folders = new Map(); // name -> {name, files[]}
 // Per-peer sidebar UI state. addr -> {receivedFiles:[{name,size}]}
 const peerUI = new Map();
@@ -273,16 +277,19 @@ function render() {
   const W = svg.clientWidth||600, H = svg.clientHeight||600;
   const cx=W/2, cy=H/2;
   const peerList = [...peers.values()];
+  const phoneList = [...phonesMap.values()];
+  // Combined node list drives the ring layout so peers and phones never overlap.
+  const nodeList = [...peerList, ...phoneList];
   const R = Math.min(W,H)*0.32;
   svg.innerHTML = '';
 
-  document.getElementById('empty-hint').classList.toggle('hidden', peerList.length>0);
+  document.getElementById('empty-hint').classList.toggle('hidden', nodeList.length>0);
   document.getElementById('peer-count').textContent =
     peerList.length===1 ? '1 peer' : `${peerList.length} peers`;
 
-  // lines
-  peerList.forEach((p,i)=>{
-    const a = (2*Math.PI*i/peerList.length) - Math.PI/2;
+  // lines + ring positions (shared by peers and phones)
+  nodeList.forEach((p,i)=>{
+    const a = (2*Math.PI*i/nodeList.length) - Math.PI/2;
     p._x = cx + R*Math.cos(a);
     p._y = cy + R*Math.sin(a);
     svg.appendChild(svgEl('line',{class:'conn-line',x1:cx,y1:cy,x2:p._x,y2:p._y}));
@@ -335,6 +342,37 @@ function render() {
     });
     svg.appendChild(g);
   }
+  // phone nodes (browsers on /phone) — same drop/click send interface as peers,
+  // but no folder send (phones receive plain files only).
+  for (const ph of phoneList) {
+    const g = document.createElementNS(NS,'g');
+    g.setAttribute('class','p-group phone');
+    g.setAttribute('data-phone', ph.id);
+    const ttl=svgEl('title'); ttl.textContent='phone: '+ph.name; g.appendChild(ttl);
+    g.appendChild(svgEl('circle',{class:'p-circle',cx:ph._x,cy:ph._y,r:40}));
+    const gl=svgEl('text',{class:'p-glyph',x:ph._x,y:ph._y-12}); gl.textContent='📱'; g.appendChild(gl);
+    const nt=svgEl('text',{class:'p-nick',x:ph._x,y:ph._y+8}); nt.textContent=ph.name; g.appendChild(nt);
+    const at=svgEl('text',{class:'p-addr',x:ph._x,y:ph._y+21}); at.textContent='phone'; g.appendChild(at);
+    const dl=svgEl('text',{class:'p-drop',x:ph._x,y:ph._y+34}); dl.textContent='drop to send'; g.appendChild(dl);
+
+    // drag onto phone node
+    let dc=0;
+    g.addEventListener('dragenter',e=>{e.preventDefault();if(++dc===1)g.classList.add('drag-on');});
+    g.addEventListener('dragleave',()=>{if(--dc===0)g.classList.remove('drag-on');});
+    g.addEventListener('dragover',e=>e.preventDefault());
+    g.addEventListener('drop',e=>{
+      e.preventDefault();dc=0;g.classList.remove('drag-on');
+      const fs=e.dataTransfer.files;
+      if(fs && fs.length) for(const f of fs) pushToPhone(ph.id,f);
+    });
+    // click to open send menu (file only)
+    g.addEventListener('click',e=>{
+      e.stopPropagation();
+      openPeerMenu(ph.id, ph.name, e.clientX, e.clientY, 'phone');
+    });
+    svg.appendChild(g);
+  }
+
   // restore any in-flight progress rings after re-render.
   refreshAllRings();
 
@@ -504,6 +542,16 @@ function sendFile(peerAddr,file) {
     .catch(e=>addNotif(String(e),true));
 }
 
+// push a single file to a connected phone (HTTP staging + targeted SSE notify).
+function pushToPhone(phoneId, file) {
+  if(!phoneId){addNotif('Select a phone first',true);return;}
+  addNotif(`Sending ${file.name} to phone...`);
+  const fd=new FormData(); fd.append('file',file);
+  fetch('/push?phone='+encodeURIComponent(phoneId),{method:'POST',body:fd})
+    .then(r=>r.ok?addNotif('Sent to phone: '+file.name):r.text().then(t=>addNotif(t,true)))
+    .catch(e=>addNotif(String(e),true));
+}
+
 // send a whole folder to a single peer.
 function sendFolder(peerAddr, files) {
   if(!peerAddr){addNotif('Select a peer first',true);return;}
@@ -525,10 +573,14 @@ function sendFolder(peerAddr, files) {
 
 // -- click menu (peers + self broadcast) --------------------------------------
 let _menuPeerAddr = '';
-function openPeerMenu(addr, label, x, y){
+let _menuKind = 'peer'; // 'peer' | 'phone' | 'all'
+function openPeerMenu(addr, label, x, y, kind='peer'){
   _menuPeerAddr = addr;
+  _menuKind = kind;
   const m = document.getElementById('peer-menu');
   document.getElementById('pm-target').textContent = 'Send to ' + label;
+  // Phones receive plain files only — no folder send.
+  document.getElementById('pm-folder').style.display = kind==='phone' ? 'none' : '';
   m.classList.add('visible');
   // Position; clamp to viewport.
   const vw = window.innerWidth, vh = window.innerHeight;
@@ -539,6 +591,7 @@ function openPeerMenu(addr, label, x, y){
 function closePeerMenu(){
   document.getElementById('peer-menu').classList.remove('visible');
   _menuPeerAddr = '';
+  _menuKind = 'peer';
 }
 document.addEventListener('click', closePeerMenu);
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') closePeerMenu(); });
@@ -546,6 +599,7 @@ document.getElementById('peer-menu').addEventListener('click', e=>e.stopPropagat
 document.getElementById('pm-file').addEventListener('click', ()=>{
   const inp=document.getElementById('peer-file-input');
   inp.dataset.peer=_menuPeerAddr;
+  inp.dataset.kind=_menuKind;
   closePeerMenu();
   inp.click();
 });
@@ -557,8 +611,12 @@ document.getElementById('pm-folder').addEventListener('click', ()=>{
 });
 document.getElementById('peer-file-input').addEventListener('change', e=>{
   const addr=e.target.dataset.peer;
-  const targets = addr===ALL ? [...peers.keys()] : [addr];
-  for(const a of targets) for(const f of e.target.files) sendFile(a,f);
+  if(e.target.dataset.kind==='phone'){
+    for(const f of e.target.files) pushToPhone(addr,f);
+  } else {
+    const targets = addr===ALL ? [...peers.keys()] : [addr];
+    for(const a of targets) for(const f of e.target.files) sendFile(a,f);
+  }
   e.target.value='';
 });
 document.getElementById('peer-folder-input').addEventListener('change', e=>{
@@ -637,6 +695,8 @@ function connect() {
     const data=JSON.parse(e.data);
     self_=data.self; peers.clear();
     (data.peers||[]).forEach(p=>peers.set(p.addr,p));
+    phonesMap.clear();
+    (data.phones||[]).forEach(p=>phonesMap.set(p.id,p));
     folders.clear();
     (data.folders||[]).forEach(f=>{folders.set(f.name,f);});
     updateTopBar(); requestAnimationFrame(render);
@@ -656,6 +716,16 @@ function connect() {
     const p=peers.get(addr); peers.delete(addr); peerUI.delete(addr);
     render(); renderPeerSections();
     addSys(`- ${p?peerLabel(p):shortName(addr)} disconnected`);
+  });
+  es.addEventListener('phone_join',e=>{
+    const p=JSON.parse(e.data);
+    phonesMap.set(p.id,p); render();
+    addSys(`+ ${p.name} (phone) connected`);
+  });
+  es.addEventListener('phone_leave',e=>{
+    const {id}=JSON.parse(e.data);
+    const p=phonesMap.get(id); phonesMap.delete(id); render();
+    addSys(`- ${p?p.name:'phone'} disconnected`);
   });
   es.addEventListener('chat',e=>{
     const {nick,text,time}=JSON.parse(e.data);
@@ -689,6 +759,31 @@ function connect() {
   es.onerror=()=>document.getElementById('status-dot').classList.add('off');
   es.onopen =()=>document.getElementById('status-dot').classList.remove('off');
 }
+
+// -- phone presence polling ---------------------------------------------------
+// The SSE phone_join/phone_leave events update the graph instantly, but polling
+// /phones is the authoritative source of truth so presence self-heals if an
+// event is ever missed. Only re-render when the set of phones actually changes.
+function applyPhones(list){
+  const next = new Map((list||[]).map(p=>[p.id, p]));
+  let changed = next.size !== phonesMap.size;
+  if(!changed){
+    for(const [id,p] of next){
+      const cur = phonesMap.get(id);
+      if(!cur || cur.name !== p.name){ changed = true; break; }
+    }
+  }
+  if(!changed) return;
+  // Preserve layout coords on surviving nodes to avoid a visual jump.
+  for(const [id,p] of next){ const cur = phonesMap.get(id); if(cur){ p._x=cur._x; p._y=cur._y; } }
+  phonesMap.clear();
+  for(const [id,p] of next) phonesMap.set(id,p);
+  render();
+}
+async function pollPhones(){
+  try{ applyPhones(await (await fetch('/phones')).json()); }catch(_){}
+}
+function startPhonePolling(){ pollPhones(); setInterval(pollPhones, 3000); }
 
 // -- transfer progress: speed, ETA, ring, per-peer rows -----------------------
 const transfers = new Map(); // key -> {name, recv, peer, pct, bytes, total, lastBytes, lastTs, bps, recorded, row}
@@ -947,6 +1042,7 @@ let rt;
 window.addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(render,60);});
 window.addEventListener('load',render);
 connect();
+startPhonePolling();
 </script>
 </body>
 </html>

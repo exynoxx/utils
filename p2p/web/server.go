@@ -4,6 +4,8 @@
 package web
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,27 +30,47 @@ var uiHTML []byte
 //go:embed phone.html
 var phoneHTML []byte
 
-// sseHub fans out SSE messages to all connected browser clients.
+// phoneInfo identifies a connected phone (a browser on the /phone page) so the
+// desktop UI can show it as a node and target file pushes at it.
+type phoneInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// sseClient is one connected browser stream. role is "desktop" (default) or
+// "phone"; id/name are only set for phones.
+type sseClient struct {
+	ch   chan string
+	role string
+	id   string
+	name string
+}
+
+// sseHub fans out SSE messages to all connected browser clients, can target a
+// single phone, and tracks which phones are currently connected.
 type sseHub struct {
 	mu      sync.Mutex
-	clients map[chan string]struct{}
+	clients map[*sseClient]struct{}
 }
 
 func newSSEHub() *sseHub {
-	return &sseHub{clients: make(map[chan string]struct{})}
+	return &sseHub{clients: make(map[*sseClient]struct{})}
 }
 
-func (h *sseHub) subscribe() chan string {
-	ch := make(chan string, 64)
+// subscribe registers a client. role/id/name are retained only so push events
+// can be targeted at a specific phone's stream — phone *presence* is tracked
+// separately via heartbeats (see Server.phonePresence), not the SSE lifecycle.
+func (h *sseHub) subscribe(role, id, name string) *sseClient {
+	c := &sseClient{ch: make(chan string, 64), role: role, id: id, name: name}
 	h.mu.Lock()
-	h.clients[ch] = struct{}{}
+	h.clients[c] = struct{}{}
 	h.mu.Unlock()
-	return ch
+	return c
 }
 
-func (h *sseHub) unsubscribe(ch chan string) {
+func (h *sseHub) unsubscribe(c *sseClient) {
 	h.mu.Lock()
-	delete(h.clients, ch)
+	delete(h.clients, c)
 	h.mu.Unlock()
 }
 
@@ -56,12 +78,37 @@ func (h *sseHub) broadcast(event string, data []byte) {
 	msg := fmt.Sprintf("event: %s\ndata: %s\n\n", event, data)
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for ch := range h.clients {
+	for c := range h.clients {
 		select {
-		case ch <- msg:
-		default: // slow client â€” drop rather than block
+		case c.ch <- msg:
+		default: // slow client — drop rather than block
 		}
 	}
+}
+
+// sendToPhone delivers an event only to streams belonging to phone id.
+func (h *sseHub) sendToPhone(id, event string, data []byte) {
+	msg := fmt.Sprintf("event: %s\ndata: %s\n\n", event, data)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		if c.role != "phone" || c.id != id {
+			continue
+		}
+		select {
+		case c.ch <- msg:
+		default:
+		}
+	}
+}
+
+
+// pushEntry is a file staged for a single phone to download, keyed by a token.
+type pushEntry struct {
+	path    string
+	name    string
+	phoneID string
+	created time.Time
 }
 
 // Server bridges the Node to a live browser UI.
@@ -69,13 +116,48 @@ type Server struct {
 	node         *node.Node
 	hub          *sseHub
 	downloadsDir string
+
+	outboxDir string // temp dir holding files staged for PC→phone download
+	pushMu    sync.Mutex
+	pushes    map[string]pushEntry // token -> staged file
+
+	phoneMu       sync.Mutex
+	phonePresence map[string]*phoneRec // phone id -> last-seen heartbeat
 }
+
+// phoneRec tracks a phone that is heartbeating. A phone is considered connected
+// while its heartbeats keep arriving; it expires shortly after they stop.
+type phoneRec struct {
+	name     string
+	lastSeen time.Time
+}
+
+// Heartbeat timing: phones ping every phonePingInterval; a phone is dropped if
+// nothing is heard for phoneTTL (a few missed pings).
+const (
+	phonePingInterval = 3 * time.Second
+	phoneTTL          = 9 * time.Second
+)
 
 // New creates a Server wired to n. downloadsDir is the folder that received
 // files are written to and listed from. Registers node callbacks immediately;
 // call ListenAndServe to start the HTTP server.
 func New(n *node.Node, downloadsDir string) *Server {
-	s := &Server{node: n, hub: newSSEHub(), downloadsDir: downloadsDir}
+	s := &Server{
+		node:          n,
+		hub:           newSSEHub(),
+		downloadsDir:  downloadsDir,
+		pushes:        make(map[string]pushEntry),
+		phonePresence: make(map[string]*phoneRec),
+	}
+
+	// Temp dir for files staged to be pushed to a phone. Best-effort: if it
+	// can't be created, push requests will fail individually with a clear error.
+	if dir, err := os.MkdirTemp("", "p2p-outbox-*"); err == nil {
+		s.outboxDir = dir
+	}
+	go s.sweepPushes()
+	go s.sweepPhones()
 
 	n.OnChat(func(nick, text string, ts time.Time) {
 		b, _ := json.Marshal(map[string]any{
@@ -147,6 +229,11 @@ func (s *Server) ListenAndServe(addr string) error {
 	mux.HandleFunc("POST /file", s.handleFile)
 	mux.HandleFunc("POST /folder", s.handleFolder)
 	mux.HandleFunc("POST /upload", s.handleUpload)
+	mux.HandleFunc("POST /push", s.handlePush)
+	mux.HandleFunc("GET /pushed", s.handlePushed)
+	mux.HandleFunc("POST /phone/ping", s.handlePhonePing)
+	mux.HandleFunc("POST /phone/bye", s.handlePhoneBye)
+	mux.HandleFunc("GET /phones", s.handlePhonesList)
 	mux.HandleFunc("GET /files", s.handleFilesList)
 	mux.HandleFunc("GET /files/open", s.handleFileOpen)
 	mux.HandleFunc("GET /files/opendir", s.handleFileOpenDir)
@@ -174,6 +261,7 @@ type initState struct {
 	Self    selfInfo          `json:"self"`
 	Peers   []node.PeerInfo   `json:"peers"`
 	Folders []folderStateInfo `json:"folders,omitempty"`
+	Phones  []phoneInfo       `json:"phones,omitempty"`
 }
 
 // folderStateInfo carries a folder name + its current file list for the init event.
@@ -205,7 +293,20 @@ func (s *Server) snapshot() initState {
 		},
 		Peers:   peers,
 		Folders: folderStates,
+		Phones:  s.phonesList(),
 	}
+}
+
+// phonesList returns the phones currently heartbeating, sorted by name.
+func (s *Server) phonesList() []phoneInfo {
+	s.phoneMu.Lock()
+	defer s.phoneMu.Unlock()
+	out := make([]phoneInfo, 0, len(s.phonePresence))
+	for id, rec := range s.phonePresence {
+		out = append(out, phoneInfo{ID: id, Name: rec.name})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // --- file list helper ---
@@ -309,13 +410,38 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher.Flush()
 
-	ch := s.hub.subscribe()
-	defer s.hub.unsubscribe(ch)
+	// Identify the client: phones pass role=phone&id=... so the PC can target
+	// file pushes at a specific one. Presence (join/leave) is tracked separately
+	// via heartbeats, not this stream's lifecycle.
+	role := r.URL.Query().Get("role")
+	if role != "phone" {
+		role = "desktop"
+	}
+	id := r.URL.Query().Get("id")
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		name = "phone"
+	}
+
+	client := s.hub.subscribe(role, id, name)
+	defer s.hub.unsubscribe(client)
+
+	// Keepalive: periodic comment frames keep proxies from closing the idle
+	// stream and surface a dead socket (write error) so presence stays live.
+	ka := time.NewTicker(15 * time.Second)
+	defer ka.Stop()
 
 	for {
 		select {
-		case msg := <-ch:
-			fmt.Fprint(w, msg)
+		case msg := <-client.ch:
+			if _, err := fmt.Fprint(w, msg); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-ka.C:
+			if _, err := fmt.Fprint(w, ":hb\n\n"); err != nil {
+				return
+			}
 			flusher.Flush()
 		case <-r.Context().Done():
 			return
@@ -592,6 +718,232 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handlePush receives a single file from the desktop UI to send to one phone.
+// The file is staged in the outbox under a random token and the target phone is
+// notified over its SSE stream with a one-time download URL. Folders are not
+// supported — phones receive plain files only.
+func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
+	phone := r.URL.Query().Get("phone")
+	if phone == "" {
+		http.Error(w, "phone query param required", http.StatusBadRequest)
+		return
+	}
+	if s.outboxDir == "" {
+		http.Error(w, "outbox unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	mr, err := r.MultipartReader()
+	if err != nil {
+		http.Error(w, "expected multipart body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	token := randomToken()
+	dir := filepath.Join(s.outboxDir, token)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		http.Error(w, "stage dir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var stagedPath, name string
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			os.RemoveAll(dir)
+			http.Error(w, "read part: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if part.FormName() != "file" {
+			part.Close()
+			continue
+		}
+		name = filepath.Base(part.FileName())
+		if name == "." || name == ".." || name == "" {
+			part.Close()
+			os.RemoveAll(dir)
+			http.Error(w, "invalid filename", http.StatusBadRequest)
+			return
+		}
+		stagedPath = filepath.Join(dir, name)
+		dst, oerr := os.OpenFile(stagedPath, os.O_CREATE|os.O_WRONLY, 0o600)
+		if oerr != nil {
+			part.Close()
+			os.RemoveAll(dir)
+			http.Error(w, "stage file: "+oerr.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, cerr := io.Copy(dst, part)
+		dst.Close()
+		part.Close()
+		if cerr != nil {
+			os.RemoveAll(dir)
+			http.Error(w, "write stage: "+cerr.Error(), http.StatusInternalServerError)
+			return
+		}
+		break
+	}
+	if stagedPath == "" {
+		os.RemoveAll(dir)
+		http.Error(w, "file field required", http.StatusBadRequest)
+		return
+	}
+
+	var size int64
+	if fi, err := os.Stat(stagedPath); err == nil {
+		size = fi.Size()
+	}
+
+	s.pushMu.Lock()
+	s.pushes[token] = pushEntry{path: stagedPath, name: name, phoneID: phone, created: time.Now()}
+	s.pushMu.Unlock()
+
+	b, _ := json.Marshal(map[string]any{
+		"name": name,
+		"size": size,
+		"url":  "/pushed?token=" + token,
+	})
+	s.hub.sendToPhone(phone, "push", b)
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// handlePushed streams a staged push file to the phone, then removes it. The
+// token is single-use: once fetched the entry and its temp file are deleted.
+func (s *Server) handlePushed(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	s.pushMu.Lock()
+	entry, ok := s.pushes[token]
+	if ok {
+		delete(s.pushes, token)
+	}
+	s.pushMu.Unlock()
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	defer os.RemoveAll(filepath.Dir(entry.path))
+
+	if fi, err := os.Stat(entry.path); err != nil || fi.IsDir() {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", entry.name))
+	http.ServeFile(w, r, entry.path)
+}
+
+// sweepPushes periodically drops staged push files that were never fetched, so
+// the outbox doesn't grow without bound when a phone goes away mid-send.
+func (s *Server) sweepPushes() {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for range t.C {
+		cutoff := time.Now().Add(-10 * time.Minute)
+		s.pushMu.Lock()
+		for token, e := range s.pushes {
+			if e.created.Before(cutoff) {
+				os.RemoveAll(filepath.Dir(e.path))
+				delete(s.pushes, token)
+			}
+		}
+		s.pushMu.Unlock()
+	}
+}
+
+// handlePhonePing records a heartbeat from a phone. The first ping for an id
+// registers the phone (announced via phone_join); later pings keep it alive.
+// Phones call this every few seconds; the sweeper drops ones that go silent.
+func (s *Server) handlePhonePing(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.ID) == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = "phone"
+	}
+
+	s.phoneMu.Lock()
+	rec, existed := s.phonePresence[req.ID]
+	if !existed {
+		s.phonePresence[req.ID] = &phoneRec{name: name, lastSeen: time.Now()}
+	} else {
+		rec.name = name
+		rec.lastSeen = time.Now()
+	}
+	s.phoneMu.Unlock()
+
+	if !existed {
+		b, _ := json.Marshal(phoneInfo{ID: req.ID, Name: name})
+		s.hub.broadcast("phone_join", b)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePhoneBye lets a phone announce it's leaving (page close) so it drops
+// immediately instead of waiting for the heartbeat to expire. Best-effort.
+func (s *Server) handlePhoneBye(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	s.phoneMu.Lock()
+	_, existed := s.phonePresence[req.ID]
+	delete(s.phonePresence, req.ID)
+	s.phoneMu.Unlock()
+	if existed {
+		b, _ := json.Marshal(map[string]string{"id": req.ID})
+		s.hub.broadcast("phone_leave", b)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePhonesList returns the phones currently heartbeating (polled by the
+// desktop UI as the authoritative presence list).
+func (s *Server) handlePhonesList(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.phonesList())
+}
+
+// sweepPhones expires phones whose heartbeats have stopped, announcing each
+// departure over SSE so the desktop UI removes it promptly.
+func (s *Server) sweepPhones() {
+	t := time.NewTicker(phonePingInterval)
+	defer t.Stop()
+	for range t.C {
+		var gone []string
+		cutoff := time.Now().Add(-phoneTTL)
+		s.phoneMu.Lock()
+		for id, rec := range s.phonePresence {
+			if rec.lastSeen.Before(cutoff) {
+				gone = append(gone, id)
+				delete(s.phonePresence, id)
+			}
+		}
+		s.phoneMu.Unlock()
+		for _, id := range gone {
+			b, _ := json.Marshal(map[string]string{"id": id})
+			s.hub.broadcast("phone_leave", b)
+		}
+	}
+}
+
+// randomToken returns a 16-byte hex string used to key staged push files.
+func randomToken() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
 // uniquePath returns a path inside dir for name that does not yet exist,
 // inserting " (n)" before the extension on collision (e.g. "img (1).jpg").
 func uniquePath(dir, name string) string {
@@ -742,6 +1094,10 @@ func (s *Server) handlePubIP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"ip": ip})
 }
+
+// OpenURL opens a URL in the user's default browser, using the same per-OS
+// launcher as openPath (which also works for URLs, not just filesystem paths).
+func OpenURL(url string) { openPath(url) }
 
 // openPath opens a file or directory with the OS default handler.
 func openPath(path string) {

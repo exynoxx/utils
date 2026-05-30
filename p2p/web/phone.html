@@ -14,13 +14,13 @@ header{margin-bottom:18px}
 h1{font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px}
 #dot{width:9px;height:9px;border-radius:50%;background:#3fb950;flex-shrink:0;transition:background .3s}
 #dot.off{background:#da3633}
-#sub{font-size:12px;color:#8b949e;margin-top:3px;word-break:break-all}
+#sub{font-size:12px;color:#8b949e;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 .card{background:#161b22;border:1px solid #21262d;border-radius:12px;padding:16px;margin-bottom:16px}
 .sec-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#6e7681;margin-bottom:12px}
 
 /* send / drop zone */
-#drop{border:2px dashed #30363d;border-radius:10px;padding:24px 14px;text-align:center;color:#8b949e;
+#drop{display:block;border:2px dashed #30363d;border-radius:10px;padding:24px 14px;text-align:center;color:#8b949e;
   transition:border-color .15s,background .15s;cursor:pointer}
 #drop.over{border-color:#388bfd;background:#10243e;color:#c9d1d9}
 #drop .big{font-size:28px;margin-bottom:6px}
@@ -98,6 +98,20 @@ const fileInput = $('#file'), drop = $('#drop'), picked = $('#picked'),
       sendBtn = $('#send'), prog = $('#prog'), bar = $('#bar'), progTxt = $('#prog-txt'),
       filesEl = $('#files'), dot = $('#dot');
 let chosen = [];
+
+// --- stable phone identity (so the PC can show + target this device) ---
+function guessName(){
+  const u = navigator.userAgent || '';
+  if(/iPhone/i.test(u)) return 'iPhone';
+  if(/iPad/i.test(u)) return 'iPad';
+  if(/Android/i.test(u)) return 'Android';
+  if(/Macintosh/i.test(u)) return 'Mac';
+  if(/Windows/i.test(u)) return 'Windows';
+  return 'phone';
+}
+let phoneId = localStorage.getItem('p2p-phone-id');
+if(!phoneId){ phoneId = 'ph_' + Math.random().toString(36).slice(2,10); localStorage.setItem('p2p-phone-id', phoneId); }
+const phoneName = localStorage.getItem('p2p-phone-name') || guessName();
 
 function fmtSize(n){
   if(n < 1024) return n + ' B';
@@ -199,23 +213,54 @@ async function loadState(){
     const r = await fetch('/state');
     const s = await r.json();
     $('#title').textContent = s.self?.nick ? `${s.self.nick}` : 'p2p';
-    $('#sub').textContent = s.self?.addr || '';
-  }catch(e){ $('#sub').textContent = ''; }
+  }catch(e){ /* SSE will reflect connection state */ }
+}
+
+// --- heartbeat: tell the PC we're here every few seconds (drives presence) ---
+function ping(){
+  fetch('/phone/ping',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:phoneId,name:phoneName})}).catch(()=>{});
+}
+function startHeartbeat(){
+  ping();
+  setInterval(ping, 3000);
+  // Resume pinging promptly when the tab comes back to the foreground.
+  document.addEventListener('visibilitychange', () => { if(!document.hidden) ping(); });
+  // Best-effort immediate goodbye so the PC drops us without waiting for expiry.
+  const bye = () => { try{ navigator.sendBeacon('/phone/bye', JSON.stringify({id:phoneId})); }catch(_){} };
+  window.addEventListener('pagehide', bye);
+}
+
+// --- auto-download a file the PC pushed to this phone ---
+function autoDownload(url, name){
+  const a = document.createElement('a');
+  a.href = url; a.download = name || ''; a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); a.remove();
 }
 
 // --- live updates over the existing SSE stream ---
 function connectSSE(){
-  const es = new EventSource('/events');
-  es.onopen = () => dot.classList.remove('off');
-  es.onerror = () => dot.classList.add('off');
+  // Identify as a phone so the PC UI shows this device and can push files to it.
+  const url = '/events?role=phone&id=' + encodeURIComponent(phoneId) + '&name=' + encodeURIComponent(phoneName);
+  const es = new EventSource(url);
+  es.onopen = () => { dot.classList.remove('off'); $('#sub').textContent = 'connected'; };
+  es.onerror = () => { dot.classList.add('off'); $('#sub').textContent = 'reconnecting…'; };
   const onFiles = e => { try{ renderFiles(JSON.parse(e.data)); }catch(_){} };
   es.addEventListener('files_changed', onFiles);
   es.addEventListener('file_done', () => loadFiles());
+  es.addEventListener('push', e => {
+    try{
+      const {name, url} = JSON.parse(e.data);
+      toast('Incoming: ' + name);
+      autoDownload(url, name);
+    }catch(_){}
+  });
 }
 
 loadState();
 loadFiles();
 connectSSE();
+startHeartbeat();
 </script>
 </body>
 </html>

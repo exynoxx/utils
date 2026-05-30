@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"p2p/cli"
 	"p2p/node"
@@ -21,6 +22,7 @@ func main() {
 	downloadsDir := flag.String("downloads", defaultDownloadsDir(), "directory for received files")
 	lan := flag.Bool("lan", true, "enable mDNS LAN auto-discovery")
 	relay := flag.String("relay", "", "comma-separated static relay multiaddrs (optional)")
+	openBrowser := flag.Bool("open", true, "open the UI in the default browser on startup")
 	share := flag.String("share", "", "comma-separated shared folder names (e.g. docs,photos)")
 	announce := flag.String("announce", "", "public IP (or ip:port) to advertise as a dialable address (full-cone NAT)")
 	flag.Parse()
@@ -86,6 +88,22 @@ func main() {
 				log.Printf("[error] web server: %v", err)
 			}
 		}()
+
+		// Open the UI in the default browser once the server is accepting
+		// connections, so the browser doesn't race the listener bind.
+		if *openBrowser {
+			go func() {
+				probe := fmt.Sprintf("127.0.0.1:%d", *uiPort)
+				for i := 0; i < 50; i++ {
+					if c, err := net.DialTimeout("tcp", probe, 200*time.Millisecond); err == nil {
+						c.Close()
+						break
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+				web.OpenURL(fmt.Sprintf("http://localhost:%d", *uiPort))
+			}()
+		}
 	}
 
 	cli.New(n).Run()
