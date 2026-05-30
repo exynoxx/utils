@@ -4,12 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,7 +16,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	corep2p "github.com/libp2p/go-libp2p/core/protocol"
 	ma "github.com/multiformats/go-multiaddr"
-	manet "github.com/multiformats/go-multiaddr/net"
 
 	"p2p/discovery"
 	"p2p/protocol"
@@ -41,11 +36,8 @@ type Config struct {
 	ListenPort    int      // TCP+QUIC listen port (v4 and v6)
 	Nick          string   // display name
 	DownloadsDir  string   // directory for received files; defaults to "downloads"
-	Bootstrap     []string // peer multiaddrs to dial on startup (/ip4/.../p2p/<id>)
-	Relays        []string // static relay multiaddrs (optional)
 	SharedFolders []string // names of folders to sync with peers
 	LAN           bool     // enable mDNS LAN discovery
-	Announce      string   // public IP (or ip:port) to advertise as dialable, e.g. "203.0.113.4"
 }
 
 // Node is the central P2P actor. It owns the libp2p host, the peer store, and
@@ -67,12 +59,6 @@ type Node struct {
 
 	folders map[string]*sharedFolder
 
-	relayMu    sync.Mutex
-	relayCands map[peer.ID]peer.AddrInfo // candidate relays surfaced to AutoRelay
-
-	announceMu sync.RWMutex
-	announce   string // public IP (or ip:port) advertised as a dialable address
-
 	ctx       context.Context
 	cancel    context.CancelFunc
 	closeOnce sync.Once
@@ -86,14 +72,12 @@ func New(cfg Config) (*Node, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &Node{
-		cfg:        cfg,
-		peers:      newPeerStore(),
-		recv:       transfer.NewReceiver(cfg.DownloadsDir),
-		relayCands: make(map[peer.ID]peer.AddrInfo),
-		announce:   strings.TrimSpace(cfg.Announce),
-		ctx:        ctx,
-		cancel:     cancel,
-		quit:       make(chan struct{}),
+		cfg:    cfg,
+		peers:  newPeerStore(),
+		recv:   transfer.NewReceiver(cfg.DownloadsDir),
+		ctx:    ctx,
+		cancel: cancel,
+		quit:   make(chan struct{}),
 	}
 
 	// Receiver progress feeds into node-level OnProgress callbacks.
@@ -116,23 +100,14 @@ func New(cfg Config) (*Node, error) {
 	}
 	n.host = h
 
-	// Seed static relay candidates from config.
-	for _, raw := range cfg.Relays {
-		if ai := parseAddrInfo(raw); ai != nil {
-			n.host.Peerstore().AddAddrs(ai.ID, ai.Addrs, peerstore.PermanentAddrTTL)
-			n.noteRelayCandidate(*ai)
-		}
-	}
-
 	n.initSharedFolders()
 	return n, nil
 }
 
-// buildHost constructs the libp2p host with the full automatic NAT-traversal
-// stack: all transports over IPv4+IPv6, UPnP/NAT-PMP port mapping, AutoNAT
-// reachability detection, DCUtR hole punching, a circuit-relay service (used
-// when this node is publicly reachable), and AutoRelay fed by peers we learn
-// through gossip (no DHT required).
+// buildHost constructs the libp2p host for LAN use: all transports over
+// IPv4+IPv6 with authenticated, encrypted connections. There is no NAT
+// traversal, relay, or hole-punching — peers reach each other directly on the
+// local network and are found via mDNS.
 func (n *Node) buildHost() (host.Host, error) {
 	p := n.cfg.ListenPort
 	listen := []string{
@@ -143,142 +118,7 @@ func (n *Node) buildHost() (host.Host, error) {
 	}
 	return libp2p.New(
 		libp2p.ListenAddrStrings(listen...),
-		libp2p.AddrsFactory(n.addrsFactory),
-		libp2p.NATPortMap(),
-		libp2p.EnableNATService(),
-		libp2p.EnableHolePunching(),
-		libp2p.EnableRelay(),
-		libp2p.EnableRelayService(),
-		libp2p.EnableAutoRelayWithPeerSource(n.relaySource),
 	)
-}
-
-// addrsFactory augments libp2p's self-reported addresses with the manually
-// announced public address (if set). On a full-cone NAT the user knows their
-// public IP, so advertising /ip4/<public>/tcp/<port> makes the copy-pasted
-// share address directly dialable from across the internet without relying on
-// UPnP or AutoNAT having discovered it. The factory is consulted on every
-// host.Addrs() call, so SetAnnounce takes effect immediately.
-func (n *Node) addrsFactory(addrs []ma.Multiaddr) []ma.Multiaddr {
-	extra := n.announceAddrs()
-	if len(extra) == 0 {
-		return addrs
-	}
-	out := append([]ma.Multiaddr(nil), addrs...)
-	for _, e := range extra {
-		dup := false
-		for _, a := range out {
-			if a.Equal(e) {
-				dup = true
-				break
-			}
-		}
-		if !dup {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// announceAddrs builds the TCP+QUIC multiaddrs for the announced public IP,
-// defaulting the port to the listen port when none is given. Returns nil when
-// no (valid) announce address is configured.
-func (n *Node) announceAddrs() []ma.Multiaddr {
-	ann := n.getAnnounce()
-	if ann == "" {
-		return nil
-	}
-	host, port := ann, n.cfg.ListenPort
-	if h, p, err := net.SplitHostPort(ann); err == nil {
-		host = h
-		if pp, err := strconv.Atoi(p); err == nil {
-			port = pp
-		}
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return nil
-	}
-	proto := "ip4"
-	if ip.To4() == nil {
-		proto = "ip6"
-	}
-	var out []ma.Multiaddr
-	for _, s := range []string{
-		fmt.Sprintf("/%s/%s/tcp/%d", proto, host, port),
-		fmt.Sprintf("/%s/%s/udp/%d/quic-v1", proto, host, port),
-	} {
-		if m, err := ma.NewMultiaddr(s); err == nil {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
-// getAnnounce returns the currently announced public address (empty if unset).
-func (n *Node) getAnnounce() string {
-	n.announceMu.RLock()
-	defer n.announceMu.RUnlock()
-	return n.announce
-}
-
-// SetAnnounce updates the announced public address at runtime. Pass "" to clear
-// it. The change is reflected immediately in P2pAddrs/ShareAddrs and propagates
-// to peers on the next peer-list gossip.
-func (n *Node) SetAnnounce(addr string) {
-	n.announceMu.Lock()
-	n.announce = strings.TrimSpace(addr)
-	n.announceMu.Unlock()
-}
-
-// AnnounceAddr returns the configured public address override (empty if unset).
-func (n *Node) AnnounceAddr() string { return n.getAnnounce() }
-
-// relaySource implements autorelay.PeerSource: it yields known relay candidates
-// (static relays plus connected peers with public addresses) and then closes
-// the channel, as AutoRelay expects.
-func (n *Node) relaySource(ctx context.Context, num int) <-chan peer.AddrInfo {
-	out := make(chan peer.AddrInfo)
-	go func() {
-		defer close(out)
-		n.relayMu.Lock()
-		cands := make([]peer.AddrInfo, 0, len(n.relayCands))
-		for _, ai := range n.relayCands {
-			cands = append(cands, ai)
-		}
-		n.relayMu.Unlock()
-		for i, ai := range cands {
-			if i >= num {
-				return
-			}
-			select {
-			case out <- ai:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	return out
-}
-
-// noteRelayCandidate records a peer as a potential relay if it advertises any
-// public address.
-func (n *Node) noteRelayCandidate(ai peer.AddrInfo) {
-	if ai.ID == "" {
-		return
-	}
-	public := make([]ma.Multiaddr, 0, len(ai.Addrs))
-	for _, a := range ai.Addrs {
-		if manet.IsPublicAddr(a) {
-			public = append(public, a)
-		}
-	}
-	if len(public) == 0 {
-		return
-	}
-	n.relayMu.Lock()
-	n.relayCands[ai.ID] = peer.AddrInfo{ID: ai.ID, Addrs: public}
-	n.relayMu.Unlock()
 }
 
 // --- callback registration (unchanged API) ---
@@ -326,28 +166,12 @@ func (n *Node) Nick() string { return n.cfg.Nick }
 // ID returns this node's libp2p peer ID string.
 func (n *Node) ID() string { return n.host.ID().String() }
 
-// ListenAddr returns a human-readable summary of the addresses this node is
-// reachable on.
-func (n *Node) ListenAddr() string { return strings.Join(n.P2pAddrs(), ", ") }
-
 // CryptoEnabled reports whether connections are encrypted. With libp2p every
 // connection is encrypted and peer-authenticated, so this is always true.
 func (n *Node) CryptoEnabled() bool { return true }
 
 // DownloadsDir returns the directory where received files are written.
 func (n *Node) DownloadsDir() string { return n.cfg.DownloadsDir }
-
-// ExternalAddr returns this node's public (internet-facing) multiaddrs, if any
-// have been discovered, joined by commas. Empty if only private/relay addrs.
-func (n *Node) ExternalAddr() string {
-	var pub []string
-	for _, a := range n.host.Addrs() {
-		if manet.IsPublicAddr(a) {
-			pub = append(pub, a.String())
-		}
-	}
-	return strings.Join(pub, ", ")
-}
 
 // P2pAddrs returns this node's fully-qualified dialable addresses, each ending
 // in /p2p/<id>. Any of these can be handed to a peer as a --bootstrap value.
@@ -362,64 +186,6 @@ func (n *Node) P2pAddrs() []string {
 		out = append(out, a.String())
 	}
 	return out
-}
-
-// ShareAddrs returns this node's dialable /p2p addresses ordered for sharing:
-// the manually announced address first (the user explicitly set it as their
-// reachable public IP), then any auto-discovered public addresses, then private
-// LAN, then link-local, then loopback. The first entry is the best one to hand
-// to a peer across the internet.
-func (n *Node) ShareAddrs() []string {
-	addrs := n.P2pAddrs()
-	// Set of announced IPs (without /p2p) so we can rank them top regardless of
-	// whether the IP falls in a range manet considers "public".
-	announced := make(map[string]bool)
-	for _, a := range n.announceAddrs() {
-		if ip, err := manet.ToIP(a); err == nil {
-			announced[ip.String()] = true
-		}
-	}
-	rank := func(s string) int {
-		m, err := ma.NewMultiaddr(s)
-		if err != nil {
-			return 5
-		}
-		if ip, err := manet.ToIP(m); err == nil && announced[ip.String()] {
-			return 0
-		}
-		switch {
-		case manet.IsPublicAddr(m):
-			return 1
-		case manet.IsIPLoopback(m):
-			return 4
-		case manet.IsIP6LinkLocal(m) || isIP4LinkLocal(m):
-			return 3
-		default:
-			return 2 // private LAN (10/8, 192.168/16, 172.16/12, etc.)
-		}
-	}
-	sort.SliceStable(addrs, func(i, j int) bool { return rank(addrs[i]) < rank(addrs[j]) })
-	return addrs
-}
-
-// isIP4LinkLocal reports whether m carries an IPv4 link-local (169.254/16)
-// address — the APIPA range that is never useful to share.
-func isIP4LinkLocal(m ma.Multiaddr) bool {
-	ip, err := manet.ToIP(m)
-	if err != nil {
-		return false
-	}
-	v4 := ip.To4()
-	return v4 != nil && v4[0] == 169 && v4[1] == 254
-}
-
-// BestShareAddr returns the single most-dialable address (the first ShareAddrs
-// entry), or "" if the node has no addresses yet.
-func (n *Node) BestShareAddr() string {
-	if a := n.ShareAddrs(); len(a) > 0 {
-		return a[0]
-	}
-	return ""
 }
 
 // Start registers the stream handler, wires connection notifications, starts
@@ -454,30 +220,7 @@ func (n *Node) Start() error {
 		}
 	}
 
-	for _, addr := range n.cfg.Bootstrap {
-		if err := n.Bootstrap(addr); err != nil {
-			fmt.Printf("[warn] bootstrap %s: %v\n", addr, err)
-		}
-	}
-
 	go n.gossipLoop()
-	return nil
-}
-
-// Bootstrap dials a peer given as a multiaddr (/ip4/.../p2p/<id>) and joins the
-// swarm; subsequent peer-exchange gossip grows the mesh.
-func (n *Node) Bootstrap(addr string) error { return n.Connect(addr) }
-
-// Connect dials a peer given as a multiaddr.
-func (n *Node) Connect(addr string) error {
-	ai := parseAddrInfo(addr)
-	if ai == nil {
-		return fmt.Errorf("invalid peer multiaddr %q (expected /ip4/.../p2p/<id>)", addr)
-	}
-	n.host.Peerstore().AddAddrs(ai.ID, ai.Addrs, peerstore.PermanentAddrTTL)
-	if err := n.host.Connect(n.ctx, *ai); err != nil {
-		return fmt.Errorf("connect %s: %w", ai.ID, err)
-	}
 	return nil
 }
 
@@ -544,7 +287,7 @@ func (n *Node) Peers() []PeerInfo {
 	list := n.peers.List()
 	out := make([]PeerInfo, 0, len(list))
 	for _, p := range list {
-		out = append(out, PeerInfo{Addr: p.Addr, Nick: p.Nick, Crypto: true, ExtAddr: p.ExtAddr})
+		out = append(out, PeerInfo{Addr: p.Addr, Nick: p.Nick, Crypto: true})
 	}
 	return out
 }
@@ -571,10 +314,9 @@ func (n *Node) Close() {
 
 // PeerInfo is a summary of a connected peer (safe to expose outside the package).
 type PeerInfo struct {
-	Addr    string `json:"addr"` // remote peer.ID string
-	Nick    string `json:"nick"`
-	Crypto  bool   `json:"crypto"`
-	ExtAddr string `json:"ext_addr,omitempty"`
+	Addr   string `json:"addr"` // remote peer.ID string
+	Nick   string `json:"nick"`
+	Crypto bool   `json:"crypto"`
 }
 
 // --- internal: stream / peer lifecycle ---
@@ -626,9 +368,6 @@ func (n *Node) setupPeer(s network.Stream) {
 	}
 	_ = s.SetDeadline(time.Time{})
 	p.Nick = their.Nick
-	if pub := firstPublicAddr(n.host.Peerstore().Addrs(pid)); pub != "" {
-		p.ExtAddr = pub
-	}
 
 	// Avoid duplicate peers (e.g. a race where both sides opened a stream).
 	if n.peers.Has(p.Addr) {
@@ -640,7 +379,7 @@ func (n *Node) setupPeer(s network.Stream) {
 	go p.readLoop(n.handleMessage)
 
 	for _, fn := range n.onPeer {
-		fn(PeerInfo{Addr: p.Addr, Nick: p.Nick, Crypto: true, ExtAddr: p.ExtAddr})
+		fn(PeerInfo{Addr: p.Addr, Nick: p.Nick, Crypto: true})
 	}
 
 	// Announce shared folders and ask the new peer for its peer list so the
@@ -757,9 +496,9 @@ func (n *Node) handlePeerListReq(requester *Peer) {
 	requester.Send(resp)
 }
 
-// handlePeerListRes ingests a peer list: records addresses, notes relay
-// candidates, and dials peers we are not yet connected to. libp2p races all
-// known transports/addresses (and relay + hole punch) automatically.
+// handlePeerListRes ingests a peer list: records addresses and dials peers we
+// are not yet connected to. libp2p races all known transports/addresses
+// automatically.
 func (n *Node) handlePeerListRes(_ *Peer, msg protocol.Message) {
 	var pl protocol.PeerListPayload
 	if err := json.Unmarshal(msg.Payload, &pl); err != nil {
@@ -771,7 +510,6 @@ func (n *Node) handlePeerListRes(_ *Peer, msg protocol.Message) {
 			continue
 		}
 		n.host.Peerstore().AddAddrs(ai.ID, ai.Addrs, peerstore.AddressTTL)
-		n.noteRelayCandidate(*ai)
 		if !n.peers.Has(ai.ID.String()) {
 			go func(target peer.AddrInfo) {
 				ctx, cancel := context.WithTimeout(n.ctx, 30*time.Second)
@@ -791,20 +529,6 @@ func (n *Node) broadcast(msg protocol.Message) {
 }
 
 // --- helpers ---
-
-// parseAddrInfo parses a /p2p multiaddr (e.g. /ip4/1.2.3.4/tcp/9000/p2p/<id>)
-// into a peer.AddrInfo, or returns nil if it is not a valid peer address.
-func parseAddrInfo(s string) *peer.AddrInfo {
-	m, err := ma.NewMultiaddr(strings.TrimSpace(s))
-	if err != nil {
-		return nil
-	}
-	ai, err := peer.AddrInfoFromP2pAddr(m)
-	if err != nil {
-		return nil
-	}
-	return ai
-}
 
 // addrInfoToWire converts a peer ID and its multiaddrs into the wire form.
 func addrInfoToWire(pid peer.ID, addrs []ma.Multiaddr) protocol.PeerAddrInfo {
@@ -829,14 +553,4 @@ func wireToAddrInfo(w protocol.PeerAddrInfo) *peer.AddrInfo {
 		}
 	}
 	return &peer.AddrInfo{ID: pid, Addrs: addrs}
-}
-
-// firstPublicAddr returns the first public multiaddr as a string, or "".
-func firstPublicAddr(addrs []ma.Multiaddr) string {
-	for _, a := range addrs {
-		if manet.IsPublicAddr(a) {
-			return a.String()
-		}
-	}
-	return ""
 }

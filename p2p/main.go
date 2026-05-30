@@ -17,25 +17,19 @@ import (
 func main() {
 	port := flag.Int("port", 9000, "TCP+QUIC port to listen on (IPv4 and IPv6)")
 	nick := flag.String("nick", defaultNick(), "display name")
-	bootstrap := flag.String("bootstrap", "", "comma-separated peer multiaddrs to dial on startup (/ip4/.../p2p/<id>)")
 	uiPort := flag.Int("ui", 8080, "HTTP port for the browser UI (0 = disabled)")
 	downloadsDir := flag.String("downloads", defaultDownloadsDir(), "directory for received files")
 	lan := flag.Bool("lan", true, "enable mDNS LAN auto-discovery")
-	relay := flag.String("relay", "", "comma-separated static relay multiaddrs (optional)")
 	openBrowser := flag.Bool("open", true, "open the UI in the default browser on startup")
 	share := flag.String("share", "", "comma-separated shared folder names (e.g. docs,photos)")
-	announce := flag.String("announce", "", "public IP (or ip:port) to advertise as a dialable address (full-cone NAT)")
 	flag.Parse()
 
 	cfg := node.Config{
 		ListenPort:    *port,
 		Nick:          *nick,
 		DownloadsDir:  *downloadsDir,
-		Bootstrap:     splitList(*bootstrap),
-		Relays:        splitList(*relay),
 		SharedFolders: splitList(*share),
 		LAN:           *lan,
-		Announce:      strings.TrimSpace(*announce),
 	}
 
 	n, err := node.New(cfg)
@@ -62,13 +56,6 @@ func main() {
 		fmt.Printf("│  UI       : http://localhost:%-8d  │\n", *uiPort)
 	}
 	fmt.Printf("└─────────────────────────────────────┘\n")
-
-	// Print the single best dialable address so a peer can copy it as a
-	// --bootstrap value. (A public address appears once discovered, or
-	// immediately when --announce is set; otherwise this is a LAN address.)
-	if best := n.BestShareAddr(); best != "" {
-		fmt.Printf("\n  ► copy this to connect from another PC:\n    %s\n\n", best)
-	}
 
 	// Phone sharing: print a LAN URL the user can type into a phone browser.
 	if *uiPort > 0 {

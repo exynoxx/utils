@@ -34,11 +34,7 @@ func (c *CLI) Run() {
 		fmt.Printf("\r[file] received → %s\n> ", path)
 	})
 	c.node.OnPeer(func(info node.PeerInfo) {
-		ext := ""
-		if info.ExtAddr != "" {
-			ext = "  ext=" + info.ExtAddr
-		}
-		fmt.Printf("\r[+] %s (%s)%s connected\n> ", info.Nick, info.Addr, ext)
+		fmt.Printf("\r[+] %s (%s) connected\n> ", info.Nick, info.Addr)
 	})
 	c.node.OnPeerLeave(func(addr string) {
 		fmt.Printf("\r[-] peer %s disconnected\n> ", addr)
@@ -73,18 +69,6 @@ func (c *CLI) dispatch(line string) bool {
 	cmd := parts[0]
 
 	switch cmd {
-	case "/connect":
-		if len(parts) < 2 {
-			fmt.Println("usage: /connect <multiaddr>  (e.g. /ip4/1.2.3.4/tcp/9000/p2p/<id>)")
-			return true
-		}
-		// Bootstrap also requests the peer list so we join the wider swarm.
-		if err := c.node.Bootstrap(parts[1]); err != nil {
-			fmt.Printf("[error] %v\n", err)
-		} else {
-			fmt.Printf("[info] connecting to %s…\n", parts[1])
-		}
-
 	case "/peers":
 		peers := c.node.Peers()
 		if len(peers) == 0 {
@@ -95,11 +79,7 @@ func (c *CLI) dispatch(line string) bool {
 				if p.Crypto {
 					crypto = " [crypto]"
 				}
-				ext := ""
-				if p.ExtAddr != "" {
-					ext = "  ext=" + p.ExtAddr
-				}
-				fmt.Printf("  %s  (%s)%s%s\n", p.Addr, p.Nick, crypto, ext)
+				fmt.Printf("  %s  (%s)%s\n", p.Addr, p.Nick, crypto)
 			}
 		}
 
@@ -110,11 +90,6 @@ func (c *CLI) dispatch(line string) bool {
 		fmt.Println("  addrs   :")
 		for _, a := range c.node.P2pAddrs() {
 			fmt.Printf("    %s\n", a)
-		}
-		if ext := c.node.ExternalAddr(); ext != "" {
-			fmt.Printf("  public  : %s  ← reachable from the internet\n", ext)
-		} else {
-			fmt.Println("  public  : (none yet — behind NAT; relay/hole-punch will be used)")
 		}
 
 	case "/send":
@@ -147,7 +122,6 @@ func (c *CLI) dispatch(line string) bool {
 }
 
 const helpText = `commands:
-  /connect <multiaddr>        dial a peer by multiaddr (also fetches peer list)
   /peers                      list connected peers
   /info                       show this node's peer id and addresses
   /send <peer-id> <path>      send a file to a peer

@@ -19,7 +19,6 @@ type Peer struct {
 	Addr    string // canonical identifier: the remote peer.ID string
 	pid     peer.ID
 	Nick    string
-	ExtAddr string // best-effort public multiaddr, for display only
 	writeCh chan protocol.Message
 	once    sync.Once // ensures Close is idempotent
 	done    chan struct{}

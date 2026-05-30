@@ -239,22 +239,15 @@ func (s *Server) ListenAndServe(addr string) error {
 	mux.HandleFunc("GET /files/opendir", s.handleFileOpenDir)
 	mux.HandleFunc("GET /files/download", s.handleFileDownload)
 	mux.HandleFunc("GET /folders", s.handleFoldersList)
-	mux.HandleFunc("POST /connect", s.handleConnect)
-	mux.HandleFunc("POST /announce", s.handleAnnounce)
-	mux.HandleFunc("GET /pubip", s.handlePubIP)
 	return http.ListenAndServe(addr, mux)
 }
 
 // --- snapshot types ---
 
 type selfInfo struct {
-	Nick       string   `json:"nick"`
-	Addr       string   `json:"addr"`
-	Crypto     bool     `json:"crypto"`
-	ExtAddr    string   `json:"ext_addr,omitempty"`
-	ShareAddr  string   `json:"share_addr"`            // best single dialable address to hand out
-	ShareAddrs []string `json:"share_addrs,omitempty"` // all dialable addresses, public-first
-	Announce   string   `json:"announce,omitempty"`    // configured public-IP override
+	Nick   string `json:"nick"`
+	Addr   string `json:"addr"` // this node's peer ID
+	Crypto bool   `json:"crypto"`
 }
 
 type initState struct {
@@ -283,13 +276,9 @@ func (s *Server) snapshot() initState {
 	}
 	return initState{
 		Self: selfInfo{
-			Nick:       s.node.Nick(),
-			Addr:       s.node.ListenAddr(),
-			Crypto:     s.node.CryptoEnabled(),
-			ExtAddr:    s.node.ExternalAddr(),
-			ShareAddr:  s.node.BestShareAddr(),
-			ShareAddrs: s.node.ShareAddrs(),
-			Announce:   s.node.AnnounceAddr(),
+			Nick:   s.node.Nick(),
+			Addr:   s.node.ID(),
+			Crypto: s.node.CryptoEnabled(),
 		},
 		Peers:   peers,
 		Folders: folderStates,
@@ -1035,64 +1024,6 @@ func (s *Server) handleFoldersList(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
-}
-
-// handleConnect dials a peer by the multiaddr pasted in the browser.
-func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Addr string `json:"addr"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	req.Addr = strings.TrimSpace(req.Addr)
-	if req.Addr == "" {
-		http.Error(w, "addr required", http.StatusBadRequest)
-		return
-	}
-	if err := s.node.Connect(req.Addr); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// handleAnnounce sets (or clears) the advertised public IP and pushes the
-// refreshed self info to all connected browsers.
-func (s *Server) handleAnnounce(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		IP string `json:"ip"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	s.node.SetAnnounce(strings.TrimSpace(req.IP))
-	if b, err := json.Marshal(s.snapshot().Self); err == nil {
-		s.hub.broadcast("self", b)
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// handlePubIP best-effort discovers this machine's public IP via an external
-// echo service, so the user can fill the announce field with one click.
-func (s *Server) handlePubIP(w http.ResponseWriter, r *http.Request) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("https://api.ipify.org")
-	if err != nil {
-		http.Error(w, "lookup failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
-	if err != nil {
-		http.Error(w, "read failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	ip := strings.TrimSpace(string(body))
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"ip": ip})
 }
 
 // OpenURL opens a URL in the user's default browser, using the same per-OS
