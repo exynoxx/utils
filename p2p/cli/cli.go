@@ -75,7 +75,7 @@ func (c *CLI) dispatch(line string) bool {
 	switch cmd {
 	case "/connect":
 		if len(parts) < 2 {
-			fmt.Println("usage: /connect <host:port>")
+			fmt.Println("usage: /connect <multiaddr>  (e.g. /ip4/1.2.3.4/tcp/9000/p2p/<id>)")
 			return true
 		}
 		// Bootstrap also requests the peer list so we join the wider swarm.
@@ -105,17 +105,21 @@ func (c *CLI) dispatch(line string) bool {
 
 	case "/info":
 		fmt.Printf("  nick    : %s\n", c.node.Nick())
-		fmt.Printf("  listen  : %s\n", c.node.ListenAddr())
-		fmt.Printf("  crypto  : %v\n", c.node.CryptoEnabled())
+		fmt.Printf("  peer id : %s\n", c.node.ID())
+		fmt.Printf("  crypto  : %v (libp2p Noise/TLS)\n", c.node.CryptoEnabled())
+		fmt.Println("  addrs   :")
+		for _, a := range c.node.P2pAddrs() {
+			fmt.Printf("    %s\n", a)
+		}
 		if ext := c.node.ExternalAddr(); ext != "" {
-			fmt.Printf("  ext addr: %s  ← share this for internet connections\n", ext)
+			fmt.Printf("  public  : %s  ← reachable from the internet\n", ext)
 		} else {
-			fmt.Println("  ext addr: (not available — STUN may have failed)")
+			fmt.Println("  public  : (none yet — behind NAT; relay/hole-punch will be used)")
 		}
 
 	case "/send":
 		if len(parts) < 3 {
-			fmt.Println("usage: /send <host:port> <filepath>")
+			fmt.Println("usage: /send <peer-id> <filepath>")
 			return true
 		}
 		addr, path := parts[1], parts[2]
@@ -143,10 +147,10 @@ func (c *CLI) dispatch(line string) bool {
 }
 
 const helpText = `commands:
-  /connect <host:port>        dial a peer (also fetches peer list)
+  /connect <multiaddr>        dial a peer by multiaddr (also fetches peer list)
   /peers                      list connected peers
-  /info                       show this node's address and ext addr
-  /send <host:port> <path>    send a file to a peer
+  /info                       show this node's peer id and addresses
+  /send <peer-id> <path>      send a file to a peer
   /help                       show this message
   /quit                       exit
   <anything else>             broadcast as chat message`

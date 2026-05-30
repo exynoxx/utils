@@ -1,6 +1,8 @@
 # p2p
 
-A fully decentralised peer-to-peer application for chat, file transfer, and folder sync across any network — including the public internet through NAT firewalls. No central server. No registration. No framework dependencies beyond the Go standard library and `golang.org/x/crypto`.
+A fully decentralised peer-to-peer application for chat, file transfer, and folder sync across any network — including the public internet through NAT firewalls. No central server. No registration.
+
+The networking core is built on [**go-libp2p**](https://github.com/libp2p/go-libp2p), the reference peer-to-peer stack: multi-transport dialing (TCP + QUIC, IPv4 + IPv6), authenticated and encrypted connections, NAT hole punching (DCUtR), and Circuit Relay v2 fallback. The application layer — chat, file transfer, folder sync, browser UI, CLI — is original code layered on top.
 
 ---
 
@@ -9,7 +11,7 @@ A fully decentralised peer-to-peer application for chat, file transfer, and fold
 1. [How it works](#how-it-works)
 2. [Auto-discovery](#auto-discovery)
 3. [NAT traversal and internet connectivity](#nat-traversal-and-internet-connectivity)
-4. [Encryption](#encryption)
+4. [Encryption and identity](#encryption-and-identity)
 5. [Chat](#chat)
 6. [File transfer](#file-transfer)
 7. [Shared folder sync](#shared-folder-sync)
@@ -25,14 +27,18 @@ A fully decentralised peer-to-peer application for chat, file transfer, and fold
 
 ## How it works
 
-Each node listens on a single TCP port. When a peer connects, both sides exchange a plain-text `handshake` message that contains the peer's nick, their **listener** port, a crypto flag, and their external address (from STUN). From that point on all messages — chat, file chunks, peer lists, hole-punch signals — flow over the same persistent TCP connection using a simple 4-byte length-prefixed JSON framing.
-
-A node can be the dialler or the acceptor; both roles are symmetric. Once two nodes are connected, they exchange peer lists and dial every address they don't already know, growing the mesh automatically.
+Each node runs a single **libp2p host**. A host has a cryptographic **peer ID** (derived from its key pair) and listens on TCP and QUIC over both IPv4 and IPv6. Peers are addressed by **multiaddr** — a self-describing address such as:
 
 ```
-Alice ──TCP──► Bob ──TCP──► Carol
-  └──────────────TCP──────────┘
+/ip4/203.0.113.7/tcp/9000/p2p/12D3KooW…
+/ip4/203.0.113.7/udp/9000/quic-v1/p2p/12D3KooW…
 ```
+
+The trailing `/p2p/<peer-id>` component means a multiaddr is self-authenticating: libp2p verifies that the peer you reach actually owns that ID before the connection is established.
+
+When two nodes connect, libp2p negotiates a transport, performs an authenticated encrypted handshake, and identifies the peer. The application then opens exactly **one bidirectional stream** per peer over the app protocol `/p2p-app/1.0.0`. To avoid both sides opening a stream at once, the peer with the lexicographically-smaller peer ID opens it and the other accepts (a `peers.Has` guard + `stream.Reset()` is the backstop). The first framed message on the stream is an app-level `handshake` carrying just the peer's nick — everything else (auth, encryption, identity) is already done by libp2p.
+
+From there, all messages — chat, file chunks, peer lists, folder sync — flow over that one stream using a simple length-prefixed framing (see [Wire protocol](#wire-protocol)).
 
 There is no central tracker or coordination server. Every node is equal.
 
@@ -40,79 +46,43 @@ There is no central tracker or coordination server. Every node is equal.
 
 ## Auto-discovery
 
-### LAN discovery (UDP broadcast)
+### LAN discovery (mDNS)
 
-On a local network, nodes find each other with zero configuration. Each node sends a UDP broadcast to `255.255.255.255` on the discovery port (default `9009`) every **5 seconds**. The payload is a small JSON announcement:
-
-```json
-{"nick": "alice", "listen_port": 9000}
-```
-
-Every node listens on the same discovery port. When an announcement arrives from an unknown sender, the receiving node dials `senderIP:listen_port` directly over TCP and bootstraps from it. Self-announcements (same IP and port as self) are silently ignored.
-
-LAN discovery requires no flags — it is on by default. Set `--disco-port 0` to disable it.
+On a local network, nodes find each other with zero configuration via libp2p's **mDNS** service. Each node advertises itself and watches for others on the local segment; discovered peers are dialed automatically. LAN discovery is on by default — disable it with `--lan=false`.
 
 ### Bootstrap (manual, for internet)
 
-To join a swarm across the internet, supply one known peer:
+To join a swarm across the internet, supply one or more known peer multiaddrs:
 
 ```
-./p2p --port 9000 --nick alice --bootstrap 203.0.113.7:9001
+./p2p --port 9000 --nick alice --bootstrap /ip4/203.0.113.7/tcp/9001/p2p/12D3KooW…
 ```
 
-After dialling the bootstrap peer, the node immediately sends a `peer_list_req` and dials all returned addresses. This transitively discovers the entire swarm in a single round trip.
+On startup the node dials each bootstrap multiaddr and requests its peer list. This transitively discovers the wider swarm. The fully-qualified `/p2p/<id>` addresses to share are printed at startup (and shown by `/info`).
 
 ---
 
 ## NAT traversal and internet connectivity
 
-Most consumer internet connections sit behind NAT routers. Connecting two such peers directly — without a relay — requires opening a path through both routers simultaneously. This application implements the full standard technique: **STUN address discovery** followed by **UDP hole punching** with a **TCP simultaneous-open** over the punched path.
+Most consumer connections sit behind NAT. libp2p attempts, in roughly this order, whatever can establish a path between two peers — and races multiple transports/paths concurrently:
 
-### Step 1 — STUN (external address discovery)
+- **Port mapping** — `NATPortMap` asks the local router to open a port via UPnP / NAT-PMP.
+- **AutoNAT** — peers tell each other whether they are publicly reachable, so a node learns its own reachability and public addresses.
+- **DCUtR hole punching** — for two NATed peers, libp2p coordinates a simultaneous-open through a relay to punch a **direct** connection (TCP or QUIC). This is the protocol-correct version of what the old custom stack got wrong.
+- **Circuit Relay v2** — if a direct path can't be made (CGNAT / symmetric NAT), traffic is relayed through a third, publicly-reachable peer. A `/p2p-circuit` multiaddr identifies a relayed route. Relayed connections are upgraded to direct via DCUtR whenever possible.
+- **AutoRelay** — the node automatically reserves relay slots on known public peers so it remains reachable behind NAT.
 
-At startup, the node sends a standard RFC 5389 STUN Binding Request to a STUN server (default: `stun.l.google.com:19302`). The server returns the node's **external IP and port** as seen from the public internet. This external address is shared with all connected peers during handshake so that any peer learning the address can attempt to connect.
+### Relay discovery (no DHT)
 
-The UDP socket used for STUN is bound to the **same port number** as the TCP listener. This is the key that makes hole punching work: NAT routers create a port mapping per (protocol, internal-port) pair; by using the same port for both UDP probing and the eventual TCP connection, the same NAT mapping is reused.
-
-### Step 2 — UDP hole punching
-
-When a direct TCP connection fails (i.e. both peers are behind restrictive NAT), the following sequence runs automatically:
-
-1. The initiating peer (`A`) broadcasts a `holepunch_req` message to all currently-connected peers. The message contains `A`'s external UDP address and the target peer `B`'s external UDP address, plus a random `token`.
-
-2. Any already-connected peer relays the `holepunch_req` to `B` if they are connected to it. `B` responds with a `holepunch_ack` (also relayed back to `A`).
-
-3. Both `A` and `B` start sending UDP probe datagrams to each other's external address every **150 ms**. Each datagram carries the `token` as confirmation. When a probe arrives from the remote address, both NAT routers have now created mappings that allow traffic to flow in both directions — the "hole" is punched.
-
-4. With the hole open, `A` calls `DialTCP` using the **same local port** as the UDP socket (enforced with `SO_REUSEPORT` on Linux/macOS and `SO_REUSEADDR` on Windows). Because the NAT router already has an outbound mapping for that port, the TCP SYN is allowed through and `B`'s router forwards it.
-
-The three connection attempts happen in order — direct TCP, then external TCP (for full-cone NAT), then hole punch — with a short timeout at each stage. If any attempt succeeds, the rest are abandoned.
+This build deliberately uses **no DHT**. Relay candidates come from our own peer-exchange gossip (known publicly-reachable peers are fed to libp2p's AutoRelay `PeerSource`) plus any static relays passed with `--relay`. The trade-off: bridging two CGNAT/symmetric peers requires at least one publicly-reachable peer (running the relay service) to be known via bootstrap or gossip. When in doubt, point everyone at an explicit `--relay`.
 
 ---
 
-## Encryption
+## Encryption and identity
 
-Encryption is **optional** and **per-connection**. Mixed swarms work: an encrypted node can connect to a plain node and both will fall back to plain-text for that link while keeping other links encrypted.
+Connections are **always** encrypted and peer-authenticated — there is no plaintext mode and no `--crypto` flag. libp2p negotiates a **Noise** or **TLS 1.3** handshake on every connection, and the peer ID cryptographically binds the connection to a specific key pair, so a man-in-the-middle cannot impersonate a peer (the gap the old unauthenticated key-swap left open).
 
-Enable with `--crypto`:
-
-```
-./p2p --port 9000 --nick alice --crypto
-```
-
-### How it works
-
-At startup, each `--crypto` node generates a **Curve25519** key pair using `golang.org/x/crypto/nacl/box`.
-
-After the plain-text `handshake` (which only reveals nick, port, and the fact that both sides want crypto), both peers exchange their Curve25519 public keys in a `crypto_handshake` message. Each side then calls `box.Precompute` to derive a **shared secret** from their private key and the peer's public key. This shared key is never transmitted; it is computed independently on both sides using Diffie-Hellman.
-
-Every subsequent message is encrypted with **XSalsa20-Poly1305** (NaCl `box.SealAfterPrecomputation`). Each message gets a fresh **24-byte random nonce** from `crypto/rand`, prepended to the ciphertext. The receiver extracts the nonce and calls `box.OpenAfterPrecomputation`; authentication failure returns an error and closes the connection.
-
-Security properties:
-- **Confidentiality**: XSalsa20 stream cipher, 256-bit key.
-- **Integrity and authenticity**: Poly1305 MAC, verified on every message.
-- **Forward secrecy**: key pairs are ephemeral (generated fresh at each startup, never stored to disk).
-- **Replay protection**: nonces are randomly generated per message via `crypto/rand`.
+**Identity is ephemeral.** A fresh key pair — and therefore a fresh peer ID — is generated at each startup; nothing is persisted to disk. Relay reservations and remembered peers reset each run. This gives forward secrecy across runs at the cost of a stable address.
 
 ---
 
@@ -126,9 +96,7 @@ hello everyone
 [14:32] bob: hey alice
 ```
 
-Messages carry the sender's nick and a Unix timestamp.
-
-In the browser UI, messages appear in a scrollable chat log with timestamps. The chat input is at the bottom of the sidebar.
+Messages carry the sender's nick and a Unix timestamp. In the browser UI they appear in a scrollable chat log; the input is at the bottom of the sidebar.
 
 ---
 
@@ -137,28 +105,28 @@ In the browser UI, messages appear in a scrollable chat log with timestamps. The
 ### Sending a file (CLI)
 
 ```
-/send 203.0.113.7:9001 /path/to/photo.jpg
+/send 12D3KooW…  /path/to/photo.jpg
 ```
+
+The first argument is the recipient's **peer ID**.
 
 ### Sending a file (browser UI)
 
-Drag a file onto a peer's node in the graph, or use the "Send File" panel to pick a peer and a file.
-
-Dragging a file onto your own node in the center broadcasts it to **all** peers.
+Drag a file onto a peer's node in the graph, or use the "Send File" panel to pick a peer and a file. Dragging a file onto your own node in the centre broadcasts it to **all** peers.
 
 ### How it works
 
-1. The sender reads the file, computes a **SHA-256 checksum** of the entire content, then transmits a `file_meta` message with the file name, size, and checksum.
-2. The file is split into **64 KB chunks**. Each chunk is sent as a `file_chunk` message with an index and a completion flag on the last chunk.
-3. The receiver stores chunks in memory as they arrive. When the final chunk arrives, it reassembles them in order, writes the output to `downloads/`, and **verifies the SHA-256 checksum**. If the checksum does not match, the file is deleted and an error is logged.
+1. The sender transmits a `file_meta` message with the file name, size, and a transfer ID.
+2. The file is streamed in **1 MB chunks**, each sent as a `file_chunk` message whose raw bytes ride in the message's binary trailer (no base64 inflation). The SHA-256 checksum is computed while streaming and sent as a `file_checksum` trailer after the final chunk.
+3. The receiver reassembles chunks in order, writes the output to `downloads/`, and **verifies the SHA-256 checksum**. On mismatch the file is deleted and an error logged. The receiver then sends a `file_ack` back to the sender.
 
-Received files go to `./downloads/` (configurable with `--downloads`). Progress is printed to stdout during both send and receive.
+Received files go to `./downloads/` (configurable with `--downloads`). Progress is printed during both send and receive.
 
 ---
 
 ## Shared folder sync
 
-Shared folders are directories that are kept in sync across all peers who also share a folder with the same name.
+Shared folders are directories kept in sync across all peers who also share a folder with the same name.
 
 ### Starting with shared folders
 
@@ -170,15 +138,15 @@ This watches `./docs/` and `./photos/` relative to the working directory.
 
 ### How it works
 
-**Announcement**: when a new peer connects, each side sends a `folder_announce` message listing all of its shared folder names. If the remote peer shares a folder with the same name, both sides register each other as subscribers and perform an **initial full sync** — walking the entire folder tree and sending every file.
+**Announcement**: when a new peer connects, each side sends a `folder_announce` listing its shared folder names. If the remote shares a folder with the same name, both register each other as subscribers and perform an **initial full sync**, sending every file.
 
-**Change detection**: a polling watcher checks each shared directory every **2 seconds**. It maintains a snapshot of every file's size and modification time. When a file is added or modified, it sends the updated file to all subscribed peers. When a file is deleted, it sends a `folder_delete` message.
+**Change detection**: a polling watcher checks each shared directory every **2 seconds**, maintaining a snapshot of each file's size and modification time. Added/modified files are sent to subscribers (`folder_file_meta` + chunks); deletions send a `folder_delete`.
 
-**Receiving changes**: received files are written to the local copy of the shared folder. The watcher's snapshot is updated (`Refresh`) after writing to avoid re-broadcasting the file just received. Similarly, `RefreshDelete` prevents echoing a deletion back to the peer that triggered it.
+**Receiving changes**: received files are written to the local copy. The snapshot is updated after writing (`Refresh` / `RefreshDelete`) so the just-received change is not echoed back.
 
-**Last-write-wins**: if a received file has a modification time older than the local version, it is silently skipped.
+**Last-write-wins**: a received file older than the local version is silently skipped.
 
-**Path traversal protection**: all received relative paths are sanitised with `filepath.Clean`, rejected if absolute, and rejected if they start with `..`. This prevents a malicious peer from writing files outside the shared folder.
+**Path traversal protection**: received relative paths are sanitised with `filepath.Clean`, rejected if absolute, and rejected if they escape the folder with `..`.
 
 ---
 
@@ -194,14 +162,14 @@ Open `http://localhost:8080` in a browser.
 
 ### Features
 
-- **Network graph**: an animated SVG showing your node in the centre connected to all peers. Encrypted connections are shown in blue with a lock label.
-- **Live updates**: all events (peer connections, chat, file arrivals, folder changes) are delivered in real time via **Server-Sent Events (SSE)**.
-- **Chat**: full chat log with timestamps; send from the input at the bottom.
-- **File transfer**: drag a file onto a peer node, or use the file picker. Drag onto your own node to broadcast to all peers.
-- **Received files**: list of all downloaded files, newest first, click to open with the OS default application.
+- **Network graph**: an animated SVG showing your node connected to all peers (identified by peer ID).
+- **Live updates**: all events (peer connections, chat, file arrivals, folder changes) stream in real time via **Server-Sent Events (SSE)**.
+- **Chat**: full chat log with timestamps.
+- **File transfer**: drag a file onto a peer node, or use the file picker. Drag onto your own node to broadcast to all.
+- **Received files**: list of downloads, newest first, click to open with the OS default app.
 - **Shared folders**: per-folder file list updated live.
-- **Notifications**: toast popups for file arrivals and peer events, auto-dismissed after 4 seconds.
-- **Self info panel**: shows your nick, listen address, external (NAT) address, and crypto status.
+- **Notifications**: toast popups for file arrivals and peer events.
+- **Self info panel**: shows your nick, peer ID, listen addresses, and public (NAT) address.
 
 The UI is a single self-contained HTML file compiled into the binary with `//go:embed`.
 
@@ -209,52 +177,42 @@ The UI is a single self-contained HTML file compiled into the binary with `//go:
 
 ## Gossip and peer propagation
 
-Every **60 seconds**, each node broadcasts a `peer_list_req` to all connected peers. Each peer responds with the addresses of all peers it knows (excluding the requester). The requester then dials any unknown addresses.
+Every **60 seconds** (and once per newly-connected peer), each node exchanges `peer_list_req` / `peer_list_res` messages. The payload is a set of `peer.AddrInfo` — peer ID plus known multiaddrs, **including any `/p2p-circuit` relay addresses** and the node's own addresses. The recipient dials any peers it doesn't already know (libp2p races all transports / relay / hole-punch).
 
-This means the mesh self-heals over time: if two parts of the network become connected only through a third node, they will eventually discover each other directly and add a redundant path.
-
-Peer list responses also include the external (STUN) address of each peer, enabling hole-punch attempts to peers behind NAT that are not yet directly reachable.
+This grows and self-heals the mesh, and doubles as relay discovery: learning a publicly-reachable peer's addresses supplies a relay candidate to AutoRelay.
 
 ---
 
 ## Wire protocol
 
-All messages use a simple binary framing over TCP:
+Each application message is framed over the libp2p stream as:
 
 ```
-[4 bytes: uint32 big-endian body length][N bytes: JSON body]
+[4 bytes: uint32 big-endian json_len]
+[4 bytes: uint32 big-endian bin_len]
+[json_len bytes: JSON-encoded message]
+[bin_len  bytes: raw binary trailer]
 ```
 
-The JSON body is always:
+The JSON body is always `{"type": "...", "payload": { ... }}`. The optional binary trailer carries large blobs (file chunks) raw, avoiding base64 overhead. Either length may be zero. Each length is capped at **128 MB**, enforced before allocation to guard against malformed headers.
 
-```json
-{"type": "message_type", "payload": { ... }}
-```
-
-Maximum message size is **128 MB**, enforced before allocation to guard against malformed length headers.
-
-When encryption is enabled, the entire JSON body is replaced with:
-
-```
-[4 bytes: uint32 sealed length][24 bytes: nonce][ciphertext + 16-byte Poly1305 tag]
-```
+The connection itself is encrypted and authenticated by libp2p (Noise / TLS), so there is no application-level crypto framing.
 
 ### Message types
 
 | Type | Direction | Purpose |
 |---|---|---|
-| `handshake` | both, first | Nick, listen port, crypto flag, external addr |
-| `crypto_handshake` | both, second | Curve25519 public key |
+| `handshake` | both, first | App-level hello — exchanges nick (libp2p already did auth/encryption/identity) |
 | `chat` | broadcast | Text message with nick and timestamp |
-| `file_meta` | unicast | File name, size, SHA-256 checksum, transfer ID |
-| `file_chunk` | unicast | 64 KB chunk with index and final flag |
-| `peer_list_req` | unicast | Request peer addresses from a peer |
-| `peer_list_res` | unicast | List of peer addresses + their external addrs |
-| `holepunch_req` | broadcast/relay | Initiate coordinated UDP hole punch |
-| `holepunch_ack` | broadcast/relay | Acknowledge and begin punching back |
+| `file_meta` | unicast | File name, size, transfer ID |
+| `file_chunk` | unicast | 1 MB chunk (raw bytes in binary trailer) with index and final flag |
+| `file_checksum` | unicast | SHA-256 trailer sent after the final chunk |
+| `file_ack` | unicast | Receiver → sender: file OK / failed |
+| `peer_list_req` | unicast | Request known peers |
+| `peer_list_res` | unicast | List of `peer.AddrInfo` (IDs + multiaddrs, incl. relay addrs) |
 | `folder_announce` | unicast | List of shared folder names |
-| `folder_file_meta` | unicast | Shared folder file metadata (with relative path) |
-| `folder_delete` | unicast | Notify peer to delete a file from shared folder |
+| `folder_file_meta` | unicast | Shared-folder file metadata (with relative path + mod time) |
+| `folder_delete` | unicast | Notify peer to delete a file from a shared folder |
 
 ---
 
@@ -263,21 +221,25 @@ When encryption is enabled, the entire JSON body is replaced with:
 ```sh
 go build ./...
 go vet ./...
+go test ./...
 
-# Node 1 — LAN, no extras
-./p2p --port 9000 --nick alice
+# Node 1 — LAN + bootstrap, web UI
+./p2p --port 9000 --nick alice --ui 8080
 
-# Node 2 — connect to alice, enable encryption
-./p2p --port 9001 --nick bob --bootstrap 127.0.0.1:9000 --crypto
+# Node 1 prints its dialable /p2p addresses. Copy one for node 2's --bootstrap.
 
-# Node 3 — internet peer with STUN, web UI, shared folder
-./p2p --port 9002 --nick carol --bootstrap alice.example.com:9000 \
-      --crypto --ui 8080 --share docs,photos
+# Node 2 — connect to alice
+./p2p --port 9001 --nick bob \
+      --bootstrap /ip4/127.0.0.1/tcp/9000/p2p/12D3KooW…
 
-# Two internet nodes with no bootstrap (mutual manual connect)
-./p2p --port 9000 --nick alice --stun stun.l.google.com:19302
-# alice shares her external address; bob does:
-./p2p --port 9000 --nick bob --bootstrap alice-external-ip:9000 --stun stun.l.google.com:19302
+# Node 3 — internet peer with a shared folder, behind NAT
+./p2p --port 9002 --nick carol \
+      --bootstrap /ip4/203.0.113.7/tcp/9000/p2p/12D3KooW… \
+      --ui 8080 --share docs,photos
+
+# Use an explicit relay when both peers are behind CGNAT / symmetric NAT
+./p2p --port 9000 --nick alice \
+      --relay /ip4/198.51.100.5/tcp/9000/p2p/12D3KooW…
 ```
 
 Received files are saved to `./downloads/` by default.
@@ -288,15 +250,14 @@ Received files are saved to `./downloads/` by default.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--port` | `9000` | TCP (and UDP) listen port |
+| `--port` | `9000` | TCP + QUIC listen port (IPv4 and IPv6) |
 | `--nick` | hostname | Display name shown to peers |
-| `--crypto` | off | Enable NaCl end-to-end encryption |
-| `--bootstrap` | — | `host:port` of a peer to connect to on startup |
-| `--stun` | `stun.l.google.com:19302` | STUN server for NAT traversal; set to empty to disable |
+| `--bootstrap` | — | Comma-separated peer multiaddrs to dial on startup (`/ip4/…/p2p/<id>`) |
+| `--relay` | — | Comma-separated static relay multiaddrs (optional) |
 | `--ui` | `8080` | HTTP port for browser UI; `0` to disable |
 | `--downloads` | `downloads` | Directory to save received files |
-| `--disco-port` | `9009` | UDP port for LAN auto-discovery; `0` to disable |
-| `--share` | — | Comma-separated folder names to watch and sync |
+| `--lan` | `true` | Enable mDNS LAN auto-discovery (`--lan=false` to disable) |
+| `--share` | — | Comma-separated shared folder names to watch and sync |
 
 ---
 
@@ -305,10 +266,11 @@ Received files are saved to `./downloads/` by default.
 | Input | Action |
 |---|---|
 | `<any text>` | Broadcast chat message to all peers |
-| `/connect <host:port>` | Dial a peer and handshake |
-| `/peers` | List all connected peers (address + nick) |
-| `/send <host:port> <path>` | Send a file to a specific peer |
-| `/nick` | Show your current nick (set at startup only) |
+| `/connect <multiaddr>` | Dial a peer by multiaddr (also fetches its peer list) |
+| `/peers` | List connected peers (peer ID + nick) |
+| `/info` | Show this node's peer ID, addresses, and public address |
+| `/send <peer-id> <path>` | Send a file to a specific peer |
+| `/nick` | Nick is set at startup only (via `--nick`) |
 | `/help` | Print command reference |
 | `/quit` | Disconnect all peers and exit |
 
@@ -318,17 +280,17 @@ Received files are saved to `./downloads/` by default.
 
 ```
 main.go         flag parsing, wires everything together
-├── node/       TCP listener, peer lifecycle, message dispatch, gossip
-│   ├── peer.go         per-peer state, read/write loops
+├── node/       libp2p host, peer lifecycle, stream dispatch, gossip, NAT stack
+│   ├── peer.go         per-peer state (stream + peer ID), read/write loops
 │   ├── peerstore.go    thread-safe peer map
 │   └── folder.go       shared folder subscription and change fan-out
-├── protocol/   wire format (length-prefix + JSON), NaCl crypto wrapper
+├── protocol/   wire format (length-prefix + JSON + binary trailer), message types
 ├── transfer/   chunked file send/receive, SHA-256 verify
-├── discovery/  LAN UDP broadcast discovery
-├── holepunch/  STUN client, UDP hole punch, SO_REUSEPORT TCP dial
+├── discovery/  libp2p mDNS LAN discovery wrapper
 ├── share/      polling directory watcher
 ├── cli/        stdin command loop
 └── web/        HTTP server, SSE hub, embedded browser UI
 ```
 
-No global state. No `init()` functions. Errors propagate up the call stack; non-fatal background errors are logged with `[warn]`. Each peer connection runs two goroutines (`readLoop`, `writeLoop`) plus a disconnect-cleanup goroutine. The gossip loop, accept loop, and each folder watcher are additional long-lived goroutines, all exiting cleanly via a `done` channel or connection close.
+Networking primitives (transports, encryption, peer auth, hole punching, relay, AutoNAT) are provided by go-libp2p; the packages above implement the application on top. Each peer connection runs `readLoop` and `writeLoop` goroutines plus a disconnect-cleanup goroutine; the gossip loop and each folder watcher are additional long-lived goroutines that exit cleanly on close.
+```

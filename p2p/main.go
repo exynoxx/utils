@@ -8,44 +8,29 @@ import (
 	"strings"
 
 	"p2p/cli"
-	"p2p/discovery"
 	"p2p/node"
 	"p2p/web"
 )
 
 func main() {
-	port         := flag.Int("port", 9000, "TCP port to listen on")
-	nick         := flag.String("nick", defaultNick(), "display name")
-	crypto       := flag.Bool("crypto", false, "enable NaCl end-to-end encryption")
-	bootstrap    := flag.String("bootstrap", "", "bootstrap peer address (host:port)")
-	uiPort       := flag.Int("ui", 8080, "HTTP port for the browser UI (0 = disabled)")
-	stun         := flag.String("stun", "stun.l.google.com:19302", "STUN server for NAT traversal (empty = disabled)")
+	port := flag.Int("port", 9000, "TCP+QUIC port to listen on (IPv4 and IPv6)")
+	nick := flag.String("nick", defaultNick(), "display name")
+	bootstrap := flag.String("bootstrap", "", "comma-separated peer multiaddrs to dial on startup (/ip4/.../p2p/<id>)")
+	uiPort := flag.Int("ui", 8080, "HTTP port for the browser UI (0 = disabled)")
 	downloadsDir := flag.String("downloads", defaultDownloadsDir(), "directory for received files")
-	discoPort    := flag.Int("disco-port", 9009, "UDP port for LAN auto-discovery (0 = disabled)")
-	share        := flag.String("share", "", "comma-separated shared folder names (e.g. docs,photos)")
+	lan := flag.Bool("lan", true, "enable mDNS LAN auto-discovery")
+	relay := flag.String("relay", "", "comma-separated static relay multiaddrs (optional)")
+	share := flag.String("share", "", "comma-separated shared folder names (e.g. docs,photos)")
 	flag.Parse()
 
-	// STUN discovery is now handled inside node.Start() so that the UDP
-	// socket is bound to the same port as the TCP listener.  We pass the
-	// server address through the config.
-
-	sharedFolders := []string{}
-	if *share != "" {
-		for _, name := range strings.Split(*share, ",") {
-			name = strings.TrimSpace(name)
-			if name != "" {
-				sharedFolders = append(sharedFolders, name)
-			}
-		}
-	}
-
 	cfg := node.Config{
-		ListenAddr:    fmt.Sprintf(":%d", *port),
+		ListenPort:    *port,
 		Nick:          *nick,
-		Crypto:        *crypto,
 		DownloadsDir:  *downloadsDir,
-		STUNServer:    *stun,
-		SharedFolders: sharedFolders,
+		Bootstrap:     splitList(*bootstrap),
+		Relays:        splitList(*relay),
+		SharedFolders: splitList(*share),
+		LAN:           *lan,
 	}
 
 	n, err := node.New(cfg)
@@ -57,46 +42,29 @@ func main() {
 		log.Fatalf("start node: %v", err)
 	}
 
-	if *bootstrap != "" {
-		if err := n.Bootstrap(*bootstrap); err != nil {
-			log.Fatalf("bootstrap %s: %v", *bootstrap, err)
-		}
-	}
-
-	if *discoPort > 0 {
-		svc := discovery.New(*nick, *port, *discoPort, func(addr string) {
-			if err := n.Bootstrap(addr); err != nil {
-				fmt.Printf("[info] discovery: could not connect to %s: %v\n", addr, err)
-			}
-		})
-		if err := svc.Start(); err != nil {
-			fmt.Printf("[warn] LAN discovery unavailable: %v\n", err)
-		}
-	}
-
 	fmt.Printf("\n┌─────────────────────────────────────┐\n")
 	fmt.Printf("│  p2p node started                   │\n")
 	fmt.Printf("├─────────────────────────────────────┤\n")
-	fmt.Printf("│  nick     : %-23s  │\n", *nick)
-	fmt.Printf("│  listen   : :%-22d  │\n", *port)
-	fmt.Printf("│  crypto   : %-23v  │\n", *crypto)
+	fmt.Printf("│  nick     : %-23s  │\n", truncate(*nick, 23))
+	fmt.Printf("│  peer id  : %-23s  │\n", truncate(n.ID(), 23))
+	fmt.Printf("│  port     : %-23d  │\n", *port)
 	fmt.Printf("│  downloads: %-23s  │\n", truncate(*downloadsDir, 23))
-	if ext := n.ExternalAddr(); ext != "" {
-		fmt.Printf("│  ext addr : %-23s  │\n", ext)
-	}
-	if *bootstrap != "" {
-		fmt.Printf("│  bootstrap: %-23s  │\n", truncate(*bootstrap, 23))
-	}
-	if *discoPort > 0 {
-		fmt.Printf("│  LAN disco: UDP %-20d  │\n", *discoPort)
-	}
-	if len(sharedFolders) > 0 {
-		fmt.Printf("│  share    : %-23s  │\n", truncate(strings.Join(sharedFolders, ","), 23))
+	fmt.Printf("│  LAN disco: %-23v  │\n", *lan)
+	if len(cfg.SharedFolders) > 0 {
+		fmt.Printf("│  share    : %-23s  │\n", truncate(strings.Join(cfg.SharedFolders, ","), 23))
 	}
 	if *uiPort > 0 {
 		fmt.Printf("│  UI       : http://localhost:%-8d  │\n", *uiPort)
 	}
-	fmt.Printf("└─────────────────────────────────────┘\n\n")
+	fmt.Printf("└─────────────────────────────────────┘\n")
+
+	// Print fully-qualified dialable addresses so a peer can copy one as a
+	// --bootstrap value. (Public/relay addresses appear once discovered.)
+	fmt.Println("\n  share one of these as a bootstrap address:")
+	for _, a := range n.P2pAddrs() {
+		fmt.Printf("    %s\n", a)
+	}
+	fmt.Println()
 
 	if *uiPort > 0 {
 		addr := fmt.Sprintf(":%d", *uiPort)
@@ -123,6 +91,20 @@ func defaultNick() string {
 // was invoked.
 func defaultDownloadsDir() string {
 	return "downloads"
+}
+
+// splitList splits a comma-separated flag value into trimmed, non-empty items.
+func splitList(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func truncate(s string, n int) string {

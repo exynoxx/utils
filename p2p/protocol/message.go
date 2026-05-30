@@ -17,11 +17,7 @@ const (
 	MsgFileAck         = "file_ack"      // receiver → sender: file ok / failed
 	MsgPeerListReq     = "peer_list_req"
 	MsgPeerListRes     = "peer_list_res"
-	MsgHandshake       = "handshake"
-	MsgCryptoHandshake = "crypto_handshake"
-	// NAT hole-punch coordination (relayed through existing connections)
-	MsgHolePunchReq = "holepunch_req"
-	MsgHolePunchAck = "holepunch_ack"
+	MsgHandshake       = "handshake" // app-level hello: exchanges nick over the stream
 	// Shared folder sync
 	MsgFolderAnnounce = "folder_announce"
 	MsgFolderFileMeta = "folder_file_meta"
@@ -45,36 +41,26 @@ type ChatPayload struct {
 	Time int64  `json:"time"`
 }
 
+// HandshakePayload is the app-level hello sent as the first framed message on
+// a newly opened stream. libp2p already authenticates and encrypts the
+// connection and identifies the peer by its peer ID, so the only thing left to
+// exchange at the application layer is the human-friendly nick.
 type HandshakePayload struct {
-	Nick         string `json:"nick"`
-	ListenPort   int    `json:"listen_port"`
-	Crypto       bool   `json:"crypto"`
-	ExternalAddr string `json:"external_addr,omitempty"`
+	Nick string `json:"nick"`
 }
 
-type CryptoHandshakePayload struct {
-	PublicKey [32]byte `json:"public_key"`
+// PeerAddrInfo is the wire form of a libp2p peer.AddrInfo: a peer ID plus its
+// known multiaddrs (including any /p2p-circuit relay addresses). Shared via
+// peer-exchange gossip so nodes can dial each other and discover relays.
+type PeerAddrInfo struct {
+	ID    string   `json:"id"`              // peer.ID.String()
+	Addrs []string `json:"addrs,omitempty"` // multiaddr strings
 }
 
+// PeerListPayload carries a set of known peers for mesh growth and relay
+// discovery.
 type PeerListPayload struct {
-	Addrs []string          `json:"addrs"`
-	Ext   map[string]string `json:"ext,omitempty"` // addr → external addr
-}
-
-// HolePunchReqPayload is broadcast through relay peers to initiate a
-// coordinated UDP hole-punch.  The target peer is identified by TargetExtUDP.
-type HolePunchReqPayload struct {
-	Token           uint64 `json:"token"`             // random nonce; correlates req ↔ ack
-	RequesterExtUDP string `json:"requester_ext_udp"` // requester's external UDP addr
-	TargetExtUDP    string `json:"target_ext_udp"`    // target's external UDP addr
-}
-
-// HolePunchAckPayload is sent back (via relay) when the target has received
-// the request and begun punching.  Relays forward it based on RequesterExtUDP.
-type HolePunchAckPayload struct {
-	Token           uint64 `json:"token"`
-	AckerExtUDP     string `json:"acker_ext_udp"`     // target's confirmed external UDP addr
-	RequesterExtUDP string `json:"requester_ext_udp"` // used by relays to route the ack back
+	Peers []PeerAddrInfo `json:"peers"`
 }
 
 // FileMetaPayload introduces a file_meta message. Checksum may be empty when
