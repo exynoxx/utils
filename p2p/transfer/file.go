@@ -160,20 +160,19 @@ func streamChunks(f *os.File, id string, total int64, displayName, peerAddr stri
 // Chunks are streamed directly to disk as they arrive (TCP guarantees order),
 // so memory usage is bounded to one chunk at a time regardless of file size.
 type session struct {
-	meta            protocol.FileMetaPayload
-	file            *os.File  // open for writing; closed when Final chunk processed
-	hash            hash.Hash // running sha256 updated per chunk
-	received        int64
-	outPath         string // final destination path
-	peerAddr        string // sender address, surfaced via progressFn
-	mu              sync.Mutex
-	gotFinal        bool                              // last chunk processed; awaiting checksum trailer
-	onComplete      func(string)                      // for plain files
-	onFolderDone    func(folder, rel, abs string)     // for folder files
-	folderName      string                            // non-empty when this is a folder transfer
-	folderRel       string                            // forward-slash relPath inside folder
-	progressFn      ProgressFunc                      // may be nil
-	ackPayloadType  string                            // protocol.MsgFileAck (always for now)
+	meta         protocol.FileMetaPayload
+	file         *os.File  // open for writing; closed when Final chunk processed
+	hash         hash.Hash // running sha256 updated per chunk
+	received     int64
+	outPath      string // final destination path
+	peerAddr     string // sender address, surfaced via progressFn
+	mu           sync.Mutex
+	gotFinal     bool                          // last chunk processed; awaiting checksum trailer
+	onComplete   func(string)                  // for plain files
+	onFolderDone func(folder, rel, abs string) // for folder files
+	folderName   string                        // non-empty when this is a folder transfer
+	folderRel    string                        // forward-slash relPath inside folder
+	progressFn   ProgressFunc                  // may be nil
 }
 
 // AckSender is the signature for sending an ACK back to the file's sender.

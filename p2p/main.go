@@ -18,7 +18,7 @@ func main() {
 	port := flag.Int("port", 9000, "TCP+QUIC port to listen on (IPv4 and IPv6)")
 	nick := flag.String("nick", defaultNick(), "display name")
 	uiPort := flag.Int("ui", 8080, "HTTP port for the browser UI (0 = disabled)")
-	downloadsDir := flag.String("downloads", defaultDownloadsDir(), "directory for received files")
+	downloadsDir := flag.String("downloads", "downloads", "directory for received files")
 	lan := flag.Bool("lan", true, "enable mDNS LAN auto-discovery")
 	openBrowser := flag.Bool("open", true, "open the UI in the default browser on startup")
 	share := flag.String("share", "", "comma-separated shared folder names (e.g. docs,photos)")
@@ -57,17 +57,15 @@ func main() {
 	}
 	fmt.Printf("└─────────────────────────────────────┘\n")
 
-	// Phone sharing: print a LAN URL the user can type into a phone browser.
 	if *uiPort > 0 {
+		// Phone sharing: print a LAN URL the user can type into a phone browser.
 		if ip := lanIP(); ip != "" {
 			fmt.Println("  share files with your phone — open this in the phone's browser:")
 			fmt.Printf("    http://%s:%d/phone\n\n", ip, *uiPort)
 		} else {
 			fmt.Print("  (no LAN IP detected — phone sharing needs the PC on a local network)\n\n")
 		}
-	}
 
-	if *uiPort > 0 {
 		addr := fmt.Sprintf(":%d", *uiPort)
 		srv := web.New(n, *downloadsDir)
 		go func() {
@@ -101,13 +99,6 @@ func defaultNick() string {
 		return h
 	}
 	return "peer"
-}
-
-// defaultDownloadsDir returns a "downloads" folder relative to the current
-// working directory, so it is always predictable regardless of how the binary
-// was invoked.
-func defaultDownloadsDir() string {
-	return "downloads"
 }
 
 // splitList splits a comma-separated flag value into trimmed, non-empty items.

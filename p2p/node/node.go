@@ -126,19 +126,17 @@ func (n *Node) buildHost() (host.Host, error) {
 func (n *Node) OnChat(fn func(nick, text string, ts time.Time)) { n.onChat = append(n.onChat, fn) }
 func (n *Node) OnFile(fn func(path string))                     { n.onFile = append(n.onFile, fn) }
 func (n *Node) OnPeer(fn func(PeerInfo))                        { n.onPeer = append(n.onPeer, fn) }
-func (n *Node) OnPeerLeave(fn func(addr string))               { n.onPeerLeave = append(n.onPeerLeave, fn) }
+func (n *Node) OnPeerLeave(fn func(addr string))                { n.onPeerLeave = append(n.onPeerLeave, fn) }
 
 func (n *Node) OnFolderChange(fn func(folderName, relPath, absPath string, deleted bool)) {
 	n.onFolderChange = append(n.onFolderChange, fn)
 }
 
+// OnProgress registers a transfer-progress callback. The receiver-side hook
+// installed in New reads n.onProgress live, so appended callbacks are picked up
+// without re-registering it here.
 func (n *Node) OnProgress(fn func(name string, sent, total int64, recv bool, peerAddr string)) {
 	n.onProgress = append(n.onProgress, fn)
-	n.recv.SetProgressFunc(transfer.ProgressFunc(func(name string, sent, total int64, peerAddr string) {
-		for _, fn := range n.onProgress {
-			fn(name, sent, total, true, peerAddr)
-		}
-	}))
 }
 
 func (n *Node) OnFileAck(fn func(peerAddr, id string, ok bool, errMsg string)) {
@@ -191,7 +189,7 @@ func (n *Node) P2pAddrs() []string {
 // Start registers the stream handler, wires connection notifications, starts
 // LAN discovery, dials bootstrap peers, and launches the gossip loop.
 func (n *Node) Start() error {
-	n.host.SetStreamHandler(corep2p.ID(AppProtocol), n.handleStream)
+	n.host.SetStreamHandler(corep2p.ID(AppProtocol), n.setupPeer)
 
 	// When a connection comes up, the peer with the lexicographically-smaller
 	// ID opens the application stream; the other side accepts it via the
@@ -320,12 +318,6 @@ type PeerInfo struct {
 }
 
 // --- internal: stream / peer lifecycle ---
-
-// handleStream is invoked for inbound app streams (opened by the peer with the
-// smaller ID).
-func (n *Node) handleStream(s network.Stream) {
-	n.setupPeer(s)
-}
 
 // openStream dials the app protocol to a peer we are connected to. Called only
 // by the smaller-ID side (see Start's notifiee).

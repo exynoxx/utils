@@ -1,4 +1,4 @@
-﻿// Package web serves a live browser UI that mirrors the P2P node state.
+// Package web serves a live browser UI that mirrors the P2P node state.
 // It exposes an SSE stream for real-time events and a small REST API for
 // sending chats, files, and listing received files.
 package web
@@ -102,7 +102,6 @@ func (h *sseHub) sendToPhone(id, event string, data []byte) {
 	}
 }
 
-
 // pushEntry is a file staged for a single phone to download, keyed by a token.
 type pushEntry struct {
 	path    string
@@ -185,16 +184,15 @@ func New(n *node.Node, downloadsDir string) *Server {
 	})
 
 	n.OnFolderChange(func(folderName, relPath, absPath string, deleted bool) {
+		event := "folder_change"
 		if deleted {
-			b, _ := json.Marshal(map[string]string{"folder": folderName, "rel_path": relPath})
-			s.hub.broadcast("folder_delete", b)
-		} else {
-			b, _ := json.Marshal(map[string]string{"folder": folderName, "rel_path": relPath})
-			s.hub.broadcast("folder_change", b)
+			event = "folder_delete"
 		}
+		b, _ := json.Marshal(map[string]string{"folder": folderName, "rel_path": relPath})
+		s.hub.broadcast(event, b)
 		// Push the updated file list for this folder.
 		if fl, err := s.folderFilesJSON(folderName); err == nil {
-			b2, _ := json.Marshal(map[string]json.RawMessage{"folder": mustJSON(folderName), "files": fl})
+			b2, _ := json.Marshal(map[string]any{"folder": folderName, "files": json.RawMessage(fl)})
 			s.hub.broadcast("folder_files", b2)
 		}
 	})
@@ -356,15 +354,6 @@ func (s *Server) folderFilesJSON(folderName string) ([]byte, error) {
 	return json.Marshal([]fileEntry{})
 }
 
-// mustJSON marshals v to JSON, panicking on error (only used for string literals).
-func mustJSON(v any) json.RawMessage {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
-	}
-	return b
-}
-
 // --- handlers ---
 
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
@@ -502,21 +491,11 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		tmpPath = filepath.Join(dir, name)
-		dst, oerr := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY, 0o600)
-		if oerr != nil {
-			part.Close()
-			os.RemoveAll(dir)
-			http.Error(w, "temp file: "+oerr.Error(), http.StatusInternalServerError)
-			return
-		}
-		// Stream directly from request body to disk — no in-memory spool,
-		// no double-write through Go's multipart temp file.
-		_, cerr := io.Copy(dst, part)
-		dst.Close()
+		err = streamToFile(part, tmpPath, os.O_CREATE|os.O_WRONLY)
 		part.Close()
-		if cerr != nil {
+		if err != nil {
 			os.RemoveAll(dir)
-			http.Error(w, "write temp: "+cerr.Error(), http.StatusInternalServerError)
+			http.Error(w, "write temp: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		break
@@ -611,17 +590,10 @@ func (s *Server) handleFolder(w http.ResponseWriter, r *http.Request) {
 			abort(http.StatusInternalServerError, "stage dir: "+err.Error())
 			return
 		}
-		dst, oerr := os.OpenFile(absPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-		if oerr != nil {
-			part.Close()
-			abort(http.StatusInternalServerError, "stage file: "+oerr.Error())
-			return
-		}
-		_, cerr := io.Copy(dst, part)
-		dst.Close()
+		err = streamToFile(part, absPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC)
 		part.Close()
-		if cerr != nil {
-			abort(http.StatusInternalServerError, "write stage: "+cerr.Error())
+		if err != nil {
+			abort(http.StatusInternalServerError, "write stage: "+err.Error())
 			return
 		}
 		sawAny = true
@@ -677,18 +649,10 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		dstPath := uniquePath(s.downloadsDir, name)
-		dst, oerr := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
-		if oerr != nil {
-			part.Close()
-			http.Error(w, "create file: "+oerr.Error(), http.StatusInternalServerError)
-			return
-		}
-		_, cerr := io.Copy(dst, part)
-		dst.Close()
+		err = streamToFile(part, dstPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL)
 		part.Close()
-		if cerr != nil {
-			os.Remove(dstPath)
-			http.Error(w, "write file: "+cerr.Error(), http.StatusInternalServerError)
+		if err != nil {
+			http.Error(w, "write file: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		saved++
@@ -758,19 +722,11 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		stagedPath = filepath.Join(dir, name)
-		dst, oerr := os.OpenFile(stagedPath, os.O_CREATE|os.O_WRONLY, 0o600)
-		if oerr != nil {
-			part.Close()
-			os.RemoveAll(dir)
-			http.Error(w, "stage file: "+oerr.Error(), http.StatusInternalServerError)
-			return
-		}
-		_, cerr := io.Copy(dst, part)
-		dst.Close()
+		err = streamToFile(part, stagedPath, os.O_CREATE|os.O_WRONLY)
 		part.Close()
-		if cerr != nil {
+		if err != nil {
 			os.RemoveAll(dir)
-			http.Error(w, "write stage: "+cerr.Error(), http.StatusInternalServerError)
+			http.Error(w, "write stage: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		break
@@ -926,6 +882,23 @@ func (s *Server) sweepPhones() {
 	}
 }
 
+// streamToFile writes src to a new file at path (opened with flags|0o600),
+// streaming straight to disk with no in-memory spool. On a copy failure it
+// removes the partial file it created; an open failure leaves any existing
+// file untouched (important for O_EXCL).
+func streamToFile(src io.Reader, path string, flags int) error {
+	dst, err := os.OpenFile(path, flags, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		os.Remove(path)
+		return err
+	}
+	return dst.Close()
+}
+
 // randomToken returns a 16-byte hex string used to key staged push files.
 func randomToken() string {
 	var b [16]byte
@@ -960,17 +933,25 @@ func (s *Server) handleFilesList(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-func (s *Server) handleFileOpen(w http.ResponseWriter, r *http.Request) {
-	name := filepath.Base(r.URL.Query().Get("name"))
+// safeDownloadPath resolves a user-supplied name to an absolute path inside
+// downloadsDir, rejecting empty/dot names and anything that escapes the dir.
+func (s *Server) safeDownloadPath(name string) (string, bool) {
+	name = filepath.Base(name)
 	if name == "" || name == "." || name == ".." {
-		http.Error(w, "invalid name", http.StatusBadRequest)
-		return
+		return "", false
 	}
 	abs := filepath.Join(s.downloadsDir, name)
-	// Verify the resolved path is still inside downloadsDir.
 	rel, err := filepath.Rel(s.downloadsDir, abs)
 	if err != nil || strings.HasPrefix(rel, "..") {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		return "", false
+	}
+	return abs, true
+}
+
+func (s *Server) handleFileOpen(w http.ResponseWriter, r *http.Request) {
+	abs, ok := s.safeDownloadPath(r.URL.Query().Get("name"))
+	if !ok {
+		http.Error(w, "invalid name", http.StatusBadRequest)
 		return
 	}
 	if _, err := os.Stat(abs); err != nil {
@@ -985,23 +966,16 @@ func (s *Server) handleFileOpen(w http.ResponseWriter, r *http.Request) {
 // phone browser) as an attachment. Range requests are supported via ServeFile,
 // so large files and video scrubbing work on mobile.
 func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
-	name := filepath.Base(r.URL.Query().Get("name"))
-	if name == "" || name == "." || name == ".." {
+	abs, ok := s.safeDownloadPath(r.URL.Query().Get("name"))
+	if !ok {
 		http.Error(w, "invalid name", http.StatusBadRequest)
-		return
-	}
-	abs := filepath.Join(s.downloadsDir, name)
-	// Verify the resolved path is still inside downloadsDir.
-	rel, err := filepath.Rel(s.downloadsDir, abs)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 	if fi, err := os.Stat(abs); err != nil || fi.IsDir() {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(abs)))
 	http.ServeFile(w, r, abs)
 }
 
@@ -1043,4 +1017,3 @@ func openPath(path string) {
 	}
 	cmd.Start() //nolint:errcheck
 }
-

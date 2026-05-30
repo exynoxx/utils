@@ -54,10 +54,6 @@ func (p *Peer) Close() {
 // Done returns a channel that is closed when the peer is disconnected.
 func (p *Peer) Done() <-chan struct{} { return p.done }
 
-// HasCrypto reports whether the connection is encrypted. libp2p encrypts every
-// connection (Noise/TLS), so this is always true; kept for API compatibility.
-func (p *Peer) HasCrypto() bool { return true }
-
 // writeLoop drains writeCh and frames messages onto the stream.
 //
 // A large bufio.Writer (1 MB) coalesces back-to-back small messages into one

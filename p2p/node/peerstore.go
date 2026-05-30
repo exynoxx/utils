@@ -54,23 +54,3 @@ func (s *PeerStore) List() []*Peer {
 	}
 	return out
 }
-
-// Addrs returns just the listener addresses of all connected peers.
-func (s *PeerStore) Addrs() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]string, 0, len(s.peers))
-	for addr := range s.peers {
-		out = append(out, addr)
-	}
-	return out
-}
-
-// Len returns the number of connected peers.
-func (s *PeerStore) Len() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.peers)
-}
-
-

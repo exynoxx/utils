@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"p2p/protocol"
@@ -225,7 +226,7 @@ func (n *Node) handleFolderDelete(msg protocol.Message) {
 		return
 	}
 	relPath := filepath.FromSlash(filepath.Clean(pl.RelPath))
-	if filepath.IsAbs(relPath) || relPath == ".." || (len(relPath) >= 3 && relPath[:3] == ".."+string(filepath.Separator)) {
+	if filepath.IsAbs(relPath) || strings.HasPrefix(relPath, "..") {
 		fmt.Printf("[warn] unsafe folder delete path rejected: %s\n", pl.RelPath)
 		return
 	}
