@@ -82,6 +82,11 @@ li a:active{background:#161b22}
   </div>
 </div>
 
+<div class="card" id="incoming-card" style="display:none">
+  <div class="sec-title">Sent to this phone — tap to download</div>
+  <ul id="incoming"></ul>
+</div>
+
 <div class="card">
   <div class="files-head">
     <div class="sec-title">Files on PC</div>
@@ -96,8 +101,9 @@ li a:active{background:#161b22}
 const $ = s => document.querySelector(s);
 const fileInput = $('#file'), drop = $('#drop'), picked = $('#picked'),
       sendBtn = $('#send'), prog = $('#prog'), bar = $('#bar'), progTxt = $('#prog-txt'),
-      filesEl = $('#files'), dot = $('#dot');
-let chosen = [];
+      filesEl = $('#files'), dot = $('#dot'),
+      incomingEl = $('#incoming'), incomingCard = $('#incoming-card');
+let chosen = [], incoming = [];
 
 // --- stable phone identity (so the PC can show + target this device) ---
 function guessName(){
@@ -231,11 +237,19 @@ function startHeartbeat(){
   window.addEventListener('pagehide', bye);
 }
 
-// --- auto-download a file the PC pushed to this phone ---
-function autoDownload(url, name){
-  const a = document.createElement('a');
-  a.href = url; a.download = name || ''; a.rel = 'noopener';
-  document.body.appendChild(a); a.click(); a.remove();
+// --- files the PC pushed to this phone ---
+// Mobile browsers block programmatic downloads without a user gesture, so we
+// list pushed files as tappable links; the user's own tap does the download.
+function renderIncoming(){
+  if(incoming.length === 0){ incomingCard.style.display='none'; return; }
+  incomingCard.style.display='block';
+  incomingEl.innerHTML = incoming.map(f => `
+    <li><a href="${f.url}" download="${escapeHtml(f.name)}">
+      <span class="ic">${icon(f.name)}</span>
+      <span class="fmeta"><div class="fname">${escapeHtml(f.name)}</div>
+        <div class="fsize">${f.size ? fmtSize(f.size) : 'tap to download'}</div></span>
+      <span class="dl">⬇</span>
+    </a></li>`).join('');
 }
 
 // --- live updates over the existing SSE stream ---
@@ -250,9 +264,10 @@ function connectSSE(){
   es.addEventListener('file_done', () => loadFiles());
   es.addEventListener('push', e => {
     try{
-      const {name, url} = JSON.parse(e.data);
+      const {name, url, size} = JSON.parse(e.data);
+      incoming.unshift({name, url, size});
+      renderIncoming();
       toast('Incoming: ' + name);
-      autoDownload(url, name);
     }catch(_){}
   });
 }
